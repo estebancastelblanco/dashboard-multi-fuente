@@ -788,9 +788,124 @@ else:
             _bullets("P9", "P9 · Urgencia")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Decisión · GO / ITERATE / KILL + AH vs BH
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Decisión · GO / ITERATE / KILL</h2>", unsafe_allow_html=True)
+
+# Umbrales del experimento (ver doc de diseño)
+TRACCION_GO = 0.40       # ≥ 40% interés activo → GO
+TRACCION_KILL = 0.20     # < 20% → KILL · 20–40% → ITERATE
+ELASTICIDAD_PP = 20      # ≥ 20pp accionable entre variantes
+
+# Tracción pooled: % de leads con T&C que terminaron en interés activo. Usamos
+# "elegibles sin hipoteca" como proxy de interés activo accionable (sigue la
+# definición de "Aplican" del funnel — score≥720 y sin hipoteca previa).
+n_tc = len(df_in)
+n_aplican_neto = int(
+    df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"]).sum()
+    - df_in[df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"])]["con_hipoteca"].sum()
+)
+traccion = n_aplican_neto / n_tc if n_tc > 0 else 0.0
+
+if traccion >= TRACCION_GO:
+    decision = "GO"
+    decision_color = GREEN_DARK
+    decision_text = "Demanda real confirmada · construir el producto"
+elif traccion >= TRACCION_KILL:
+    decision = "ITERATE"
+    decision_color = YELLOW
+    decision_text = "Señal ambigua · iterar copy o extender el experimento"
+else:
+    decision = "KILL"
+    decision_color = RED
+    decision_text = "Sin demanda · no construir o pivot a producto alterno"
+
+# Elasticidad AH vs BH — conversión a T&C sobre el universo HS por variante
+def _conv_variante(var: str) -> tuple[int, int, float]:
+    if df_hs.empty or "ab_test_landing" not in df_hs.columns:
+        return 0, 0, 0.0
+    universo_v = df_hs[df_hs["ab_test_landing"] == var]
+    n_u = len(universo_v)
+    uuids_v = set(universo_v["deal_uuid"].dropna().astype(str))
+    n_tc_v = int(df_leads["uuid"].astype(str).isin(uuids_v).sum()) if "uuid" in df_leads.columns else 0
+    conv = n_tc_v / n_u if n_u > 0 else 0.0
+    return n_u, n_tc_v, conv
+
+
+n_ah, tc_ah, conv_ah = _conv_variante("AH")
+n_bh, tc_bh, conv_bh = _conv_variante("BH")
+diff_pp = (conv_bh - conv_ah) * 100
+
+if abs(diff_pp) >= ELASTICIDAD_PP:
+    plazo_pick = "BH (120 meses)" if diff_pp > 0 else "AH (84 meses)"
+    plazo_razon = f"diff {abs(diff_pp):.1f}pp ≥ {ELASTICIDAD_PP}pp · accionable"
+else:
+    plazo_pick = "AH (84 meses)"
+    plazo_razon = f"diff {abs(diff_pp):.1f}pp < {ELASTICIDAD_PP}pp · default por menor exposición"
+
+# Tarjeta de decisión
+st.markdown(
+    f"""
+<div style="display:flex;gap:14px;margin-bottom:14px">
+  <div style="flex:1;background:{decision_color};color:white;padding:18px 20px;border-radius:8px">
+    <div style="font-size:0.75rem;opacity:0.85;letter-spacing:0.08em;text-transform:uppercase">Tracción pooled</div>
+    <div style="font-size:2.2rem;font-weight:700;line-height:1.1;margin:4px 0">{decision}</div>
+    <div style="font-size:0.85rem;opacity:0.95">{traccion*100:.1f}% de los T&C aplican (sin hipoteca, score≥720)</div>
+    <div style="font-size:0.8rem;opacity:0.85;margin-top:6px">{decision_text}</div>
+  </div>
+  <div style="flex:1;background:{DEEP};color:white;padding:18px 20px;border-radius:8px">
+    <div style="font-size:0.75rem;opacity:0.85;letter-spacing:0.08em;text-transform:uppercase">Plazo recomendado</div>
+    <div style="font-size:2.2rem;font-weight:700;line-height:1.1;margin:4px 0">{plazo_pick}</div>
+    <div style="font-size:0.85rem;opacity:0.95">AH {conv_ah*100:.1f}% · BH {conv_bh*100:.1f}% · diff {diff_pp:+.1f}pp</div>
+    <div style="font-size:0.8rem;opacity:0.85;margin-top:6px">{plazo_razon}</div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# Tabla de soporte
+col_d1, col_d2 = st.columns(2)
+with col_d1:
+    st.markdown(f"<h3 style='color:{DEEP};font-size:1rem;margin:8px 0 6px 0'>Tracción · cálculo</h3>", unsafe_allow_html=True)
+    df_tr = pd.DataFrame({
+        "Métrica": ["Leads con T&C", "Aplican (score≥720 sin hipoteca)", "% Tracción"],
+        "Valor": [f"{n_tc}", f"{n_aplican_neto}", f"{traccion*100:.1f}%"],
+    })
+    st.dataframe(df_tr, hide_index=True, use_container_width=True)
+    st.caption(f"Umbrales · ≥{TRACCION_GO*100:.0f}% GO · {TRACCION_KILL*100:.0f}–{TRACCION_GO*100:.0f}% ITERATE · <{TRACCION_KILL*100:.0f}% KILL")
+
+with col_d2:
+    st.markdown(f"<h3 style='color:{DEEP};font-size:1rem;margin:8px 0 6px 0'>Elasticidad · AH vs BH</h3>", unsafe_allow_html=True)
+    df_el = pd.DataFrame({
+        "Variante": ["AH (84m)", "BH (120m)"],
+        "Universo HS": [n_ah, n_bh],
+        "T&C": [tc_ah, tc_bh],
+        "Conv T&C": [f"{conv_ah*100:.2f}%", f"{conv_bh*100:.2f}%"],
+    })
+    st.dataframe(df_el, hide_index=True, use_container_width=True)
+    st.caption(f"Diferencia accionable si |BH − AH| ≥ {ELASTICIDAD_PP}pp · default AH por menor exposición")
+
+with st.expander("Matriz de lectura"):
+    st.markdown(
+        """
+| Observación | Diagnóstico / Acción |
+|---|---|
+| Tracción ≥ 40% + elegibilidad ≥ 30% | Demanda sólida · **GO** · decidir plazo |
+| Tracción alta · BH > AH por ≥ 20pp | **GO con 120m** |
+| Tracción alta · AH > BH por ≥ 20pp | **GO con 84m** |
+| Tracción alta · AH ≈ BH (diff < 10pp) | **GO con 84m** por menor exposición |
+| Tracción 20–40% | **ITERATE** · iterar copy o extender |
+| Tracción < 20% | **KILL** o pivot a producto alterno |
+| Tracción alta solo en 1–2 segmentos | **GO selectivo** sobre segmentos núcleo |
+"""
+    )
+
+
 st.divider()
 st.caption(
     f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
-    "TTL cache: 120s (Sheets/HS) · 300s (BQ) · 3600s (HS property labels). "
+    "TTL cache: 120s (Sheets) · 24h (HS, BQ, HS property labels). "
     "Scores persisten en Aplica + Metadata del Sheet."
 )
