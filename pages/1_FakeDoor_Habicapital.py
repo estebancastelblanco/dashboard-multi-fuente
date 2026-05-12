@@ -775,19 +775,35 @@ else:
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Hipoteca</h2>", unsafe_allow_html=True)
 
-elegibles_h = df_in[df_in["aplica"] == "si"].copy()
-n_elegibles_h = len(elegibles_h)
+# Universo = leads que NO fueron rechazados por score (Aplica != "no").
+# Incluye Aplica=si (score ≥720), pending (engine en proceso), error y vacíos
+# (recién firmaron T&C y aún no se ha disparado el scoring). El estado final
+# de elegibilidad depende de score + hipoteca, así que aquí mostramos a todos
+# los candidatos que pueden todavía aplicar.
+aplica_norm = df_in["aplica"].astype(str).str.lower()
+elegibles_h = df_in[aplica_norm != "no"].copy()
+n_candidatos = len(elegibles_h)
 
-if n_elegibles_h == 0:
-    st.info("Aún no hay elegibles con los filtros actuales.")
+if n_candidatos == 0:
+    st.info("Aún no hay candidatos con los filtros actuales.")
 else:
     n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
     n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
     n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
 
+    # Elegibles confirmados = pasaron score (Aplica=si) Y sin hipoteca.
+    n_score_ok = int((aplica_norm == "si").sum())
+    elegibles_confirmados = int(
+        ((elegibles_h["aplica"].astype(str).str.lower() == "si") &
+         (elegibles_h["hipoteca_status"] == "No")).sum()
+    )
+
     st.caption(
-        f"{n_elegibles_h} elegibles · {n_si} con hipoteca · {n_no} sin hipoteca · "
-        f"{n_sd} sin contactar. La entrevista gana sobre la propiedad de HubSpot."
+        f"{n_candidatos} candidatos (score ≥720 o pendiente) · "
+        f"{elegibles_confirmados} elegibles confirmados (score + sin hipoteca) · "
+        f"{n_si} con hipoteca (no elegibles) · "
+        f"{n_sd} sin contactar (toca llamar para confirmar hipoteca). "
+        "La entrevista gana sobre la propiedad de HubSpot."
     )
 
     # Matriz tipo confusion matrix: filas = status hipoteca, cols = fuente
