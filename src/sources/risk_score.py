@@ -43,6 +43,11 @@ def _parse_metadata(aplica_cell: str, meta_cell: str) -> dict:
     except (TypeError, ValueError):
         score = None
 
+    # Si el engine quedó en pending (típicamente income_validation_pending) pero
+    # tenemos un score, decide por score. El umbral del producto es 720.
+    if aplica == "pending" and score is not None:
+        aplica = "si" if score >= 720 else "no"
+
     return {
         "score": score,
         "nivel_riesgo": meta.get("nivel_riesgo") or meta.get("Nivel Riesgo"),

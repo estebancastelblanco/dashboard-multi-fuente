@@ -610,7 +610,7 @@ st.caption(" · ".join(caption_parts))
 # Tabla raw de HubSpot deals (filtrados)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(
-    f"<h2>HubSpot · deals filtrados ({len(df_hs_f):,}) — consolidado HS+Sheets+BQ+Entrevista</h2>",
+    f"<h2>Desglose ({len(df_hs_f):,})</h2>",
     unsafe_allow_html=True,
 )
 if df_hs_f.empty:
@@ -691,10 +691,6 @@ else:
     present = [(src, lab) for src, lab in show_cols if src in consolidated.columns]
     df_display = consolidated[[s for s, _ in present]].rename(columns=dict(present))
     st.dataframe(df_display, hide_index=True, use_container_width=True)
-    st.caption(
-        "Cruces: HubSpot deal_uuid ↔ Sheets uuid · HubSpot phone (norm) ↔ "
-        "Entrevista telefono · HubSpot deal_uuid ↔ BigQuery uuid."
-    )
 
     with st.expander("Debug · propiedades vacías"):
         null_pct = (df_hs.isna().mean() * 100).round(1).sort_values(ascending=False)
@@ -729,6 +725,28 @@ else:
         st.caption(
             f"{n_elegibles} elegibles totales · {n_elegibles_contactados} ya con entrevista · "
             f"{n_elegibles_sin_contactar} aún sin contactar (call list activa)"
+        )
+
+    # Call list: elegibles que aún no se han contactado (= no están en Entrevista)
+    sin_contactar = elegibles[~elegibles["phone_norm"].astype(str).isin(elegibles_phones)]
+    if not sin_contactar.empty:
+        st.markdown(
+            f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+            f"Elegibles aún sin contactar ({len(sin_contactar)})</h3>",
+            unsafe_allow_html=True,
+        )
+        cols_sin = [c for c in [
+            "nombre_completo", "telefono", "cedula", "grupo",
+            "score", "nivel_riesgo", "cuota_maxima", "ingresos_mensuales", "razon",
+        ] if c in sin_contactar.columns]
+        st.dataframe(
+            sin_contactar[cols_sin].rename(columns={
+                "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
+                "grupo": "Grupo", "score": "Score", "nivel_riesgo": "Nivel",
+                "cuota_maxima": "Cuota Máxima", "ingresos_mensuales": "Ingresos",
+                "razon": "Razón",
+            }),
+            hide_index=True, use_container_width=True,
         )
 
     if df_int_f.empty:
