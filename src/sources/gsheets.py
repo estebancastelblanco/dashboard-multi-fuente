@@ -28,9 +28,24 @@ def _credentials() -> Credentials:
     )
 
 
-def fetch_leads() -> pd.DataFrame:
-    sheet_id = os.environ["GOOGLE_SHEETS_ID"]
-    tab = os.environ.get("GOOGLE_SHEETS_TAB", "Leads")
-    gc = gspread.authorize(_credentials())
-    ws = gc.open_by_key(sheet_id).worksheet(tab)
+def _open_spreadsheet(sheet_id: str | None = None):
+    sid = sheet_id or os.environ["GOOGLE_SHEETS_ID"]
+    return gspread.authorize(_credentials()).open_by_key(sid)
+
+
+def fetch_tab(tab: str, sheet_id: str | None = None) -> pd.DataFrame:
+    """Lee cualquier pestaña como DataFrame. Si no existe devuelve DataFrame vacío."""
+    sh = _open_spreadsheet(sheet_id)
+    try:
+        ws = sh.worksheet(tab)
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame()
     return pd.DataFrame(ws.get_all_records())
+
+
+def list_tabs(sheet_id: str | None = None) -> list[str]:
+    return [ws.title for ws in _open_spreadsheet(sheet_id).worksheets()]
+
+
+def fetch_leads() -> pd.DataFrame:
+    return fetch_tab(os.environ.get("GOOGLE_SHEETS_TAB", "Leads"))

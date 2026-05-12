@@ -1,17 +1,9 @@
-"""Dashboard multi-fuente · Streamlit
-
-Lee siempre en vivo de BigQuery, HubSpot y Google Sheets.
-Cada tabla muestra como maximo 10 filas y 4 columnas.
-
-Credenciales:
-  - Local: archivo .env (gitignored).
-  - Streamlit Cloud: Advanced settings -> Secrets (formato TOML).
-"""
+"""Selector home — biblioteca de experimentos."""
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -19,12 +11,12 @@ load_dotenv()
 
 
 def _bootstrap_from_st_secrets() -> None:
-    """Puente st.secrets -> os.environ para Streamlit Cloud."""
     keys = [
         "BQ_PROJECT_ID", "BQ_DATASET_PROJECT", "BQ_DATASET", "BQ_TABLE",
         "GOOGLE_APPLICATION_CREDENTIALS_JSON",
         "HUBSPOT_ACCESS_TOKEN",
         "GOOGLE_SHEETS_ID", "GOOGLE_SHEETS_TAB", "GOOGLE_SHEETS_CREDENTIALS",
+        "SCORE_API_URL", "SCORE_API_TOKEN",
     ]
     try:
         for k in keys:
@@ -36,57 +28,67 @@ def _bootstrap_from_st_secrets() -> None:
 
 _bootstrap_from_st_secrets()
 
-from src.sources import bigquery as bq_src
-from src.sources import gsheets as gs_src
-from src.sources import hubspot as hs_src
+from src.experiments import REGISTRY
+from src.styling import inject_base_css, DEEP, MED, PRIMARY
 
-st.set_page_config(page_title="Dashboard multi-fuente", layout="wide")
-
-st.title("Dashboard multi-fuente")
-st.caption("Datos en vivo · BigQuery + HubSpot + Google Sheets · max 10×4 por tabla")
-
-
-def _trim(df: pd.DataFrame, max_rows: int = 10, max_cols: int = 4) -> pd.DataFrame:
-    return df.iloc[:max_rows, :max_cols]
-
-
-def _section(title: str, loader, *, refresh_key: str):
-    st.subheader(title)
-    cols = st.columns([1, 6])
-    if cols[0].button("Refrescar", key=refresh_key):
-        st.cache_data.clear()
-    try:
-        df = _trim(loader())
-        if df.empty:
-            st.info("Sin datos.")
-        else:
-            st.dataframe(df, hide_index=True, use_container_width=True)
-            st.caption(f"{len(df)} filas · {len(df.columns)} columnas")
-    except Exception as exc:
-        st.error(f"Error al cargar: {type(exc).__name__}: {exc}")
-
-
-@st.cache_data(ttl=300, show_spinner="Cargando BigQuery…")
-def load_bq() -> pd.DataFrame:
-    return bq_src.fetch_top_inmuebles(limit=10)
-
-
-@st.cache_data(ttl=300, show_spinner="Cargando HubSpot…")
-def load_hs() -> pd.DataFrame:
-    return hs_src.fetch_recent_deals(limit=10)
-
-
-@st.cache_data(ttl=300, show_spinner="Cargando Google Sheets…")
-def load_gs() -> pd.DataFrame:
-    return gs_src.fetch_leads()
-
-
-_section("BigQuery · top 10 inmuebles", load_bq, refresh_key="r_bq")
-st.divider()
-_section("HubSpot · últimos 10 deals", load_hs, refresh_key="r_hs")
-st.divider()
-_section(
-    f"Google Sheets · hoja {os.environ.get('GOOGLE_SHEETS_TAB', 'Leads')}",
-    load_gs,
-    refresh_key="r_gs",
+st.set_page_config(
+    page_title="Habi · Biblioteca de experimentos",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
+inject_base_css()
+
+st.markdown(
+    f"<h1 style='color:{DEEP};font-size:1.7rem;font-weight:700;margin-bottom:0'>"
+    f"Biblioteca de experimentos</h1>"
+    f"<div style='color:{MED};font-size:0.85rem;margin-bottom:24px'>"
+    f"Habi Capital · dashboards en tiempo real</div>",
+    unsafe_allow_html=True,
+)
+
+ROOT = Path(__file__).parent
+
+cols = st.columns(min(len(REGISTRY), 2))
+for idx, exp in enumerate(REGISTRY):
+    with cols[idx % len(cols)]:
+        end = exp.end_date or "en curso"
+        st.markdown(
+            f"<div class='exp-card'>"
+            f"<div class='exp-title'>{exp.title}</div>"
+            f"<div class='exp-dates'>{exp.start_date} → {end}</div>"
+            f"<div style='font-size:0.85rem;color:#333;margin-bottom:12px'>"
+            f"{exp.description}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        link_cols = st.columns(2)
+        with link_cols[0]:
+            if exp.design_doc_url:
+                st.link_button("Diseño", exp.design_doc_url, use_container_width=True)
+            else:
+                st.button("Diseño", disabled=True, use_container_width=True, key=f"d_{exp.slug}")
+        with link_cols[1]:
+            if exp.results_doc_url:
+                st.link_button("Resultados", exp.results_doc_url, use_container_width=True)
+            else:
+                st.button("Resultados", disabled=True, use_container_width=True, key=f"r_{exp.slug}")
+
+        st.page_link(exp.page, label=f"Abrir dashboard →", use_container_width=True)
+
+        if exp.attachments:
+            with st.expander("Documentos adjuntos", expanded=False):
+                for rel in exp.attachments:
+                    path = ROOT / rel
+                    if not path.exists():
+                        st.caption(f"(falta) {rel}")
+                        continue
+                    st.caption(rel)
+                    body = path.read_text()
+                    if path.suffix == ".sql":
+                        st.code(body, language="sql")
+                    elif path.suffix in (".md", ".txt"):
+                        st.markdown(f"```\n{body}\n```")
+                    else:
+                        st.code(body)
+        st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)

@@ -2,13 +2,36 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
 
+# Propiedades del experimento FakeDoor (internal_name -> label en HubSpot)
+FAKEDOOR_PROPS: dict[str, str] = {
+    "hs_object_id":                 "ID de registro",
+    "dealname":                     "Nombre del negocio",
+    "hubspot_owner_id":             "Propietario del negocio",
+    "pipeline":                     "Pipeline",
+    "createdate":                   "Fecha de creación",
+    "dealstage":                    "Estado del Negocio",
+    "deal_uuid":                    "deal_uuid",
+    "flag_fakedoor":                "flag fakedoor",
+    "negocio_aplica_para_bnpl":     "¿Negocio aplica para BNPL?",
+    "oportunidad_del_negocio_co":   "Oportunidad del negocio (CO)",
+    "phone":                        "Teléfono",
+    "nombre_del_conjunto":          "nombre del conjunto",
+    "abc_test_landing_co":          "ABC test landing Co",
+    "ab_test_landing":              "ab_test_landing",
+}
+
+
+def _token() -> str:
+    return os.environ["HUBSPOT_ACCESS_TOKEN"]
+
 
 def fetch_recent_deals(limit: int = 10) -> pd.DataFrame:
-    token = os.environ["HUBSPOT_ACCESS_TOKEN"]
+    """Últimos N deals — demo simple."""
     properties = ["dealname", "amount", "dealstage", "createdate"]
     url = "https://api.hubapi.com/crm/v3/objects/deals/search"
     payload = {
@@ -16,19 +39,66 @@ def fetch_recent_deals(limit: int = 10) -> pd.DataFrame:
         "properties": properties,
         "limit": int(limit),
     }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    resp = requests.post(url, json=payload, headers=headers, timeout=20)
+    resp = requests.post(url, json=payload, headers=_headers(), timeout=20)
     resp.raise_for_status()
-    results = resp.json().get("results", [])
-
-    rows = [{k: d.get("properties", {}).get(k) for k in properties} for d in results]
-    df = pd.DataFrame(rows, columns=properties).rename(columns={
-        "dealname": "Deal",
-        "amount": "Monto",
-        "dealstage": "Etapa",
-        "createdate": "Creado",
+    rows = [{k: d.get("properties", {}).get(k) for k in properties}
+            for d in resp.json().get("results", [])]
+    return pd.DataFrame(rows, columns=properties).rename(columns={
+        "dealname": "Deal", "amount": "Monto",
+        "dealstage": "Etapa", "createdate": "Creado",
     })
+
+
+def _headers() -> dict:
+    return {"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"}
+
+
+def fetch_fakedoor_deals(since_iso: str = "2026-04-20") -> pd.DataFrame:
+    """Trae deals con flag_fakedoor IS_NOT_EMPTY y createdate >= since_iso.
+
+    Pagina 100 a la vez hasta agotar resultados. Devuelve un DataFrame con
+    las columnas internas (snake_case) que el dashboard sabrá renombrar.
+    """
+    since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    properties = list(FAKEDOOR_PROPS.keys())
+    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    rows: list[dict] = []
+    after: str | None = None
+    for _ in range(50):  # max 5000 deals
+        payload = {
+            "filterGroups": [{
+                "filters": [
+                    {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
+                    {"propertyName": "flag_fakedoor", "operator": "HAS_PROPERTY"},
+                ],
+            }],
+            "properties": properties,
+            "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        for deal in body.get("results", []):
+            props = deal.get("properties", {})
+            rows.append({k: props.get(k) for k in properties})
+        paging = body.get("paging", {}).get("next")
+        if not paging:
+            break
+        after = paging.get("after")
+
+    df = pd.DataFrame(rows, columns=properties)
+    if "createdate" in df.columns:
+        df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
     return df
+
+
+def list_deal_properties() -> pd.DataFrame:
+    """Devuelve todas las propiedades del objeto deal (para descubrir internal names)."""
+    url = "https://api.hubapi.com/crm/v3/properties/deals"
+    resp = requests.get(url, headers=_headers(), timeout=20)
+    resp.raise_for_status()
+    rows = [{"name": p["name"], "label": p.get("label", "")} for p in resp.json().get("results", [])]
+    return pd.DataFrame(rows).sort_values("label").reset_index(drop=True)
