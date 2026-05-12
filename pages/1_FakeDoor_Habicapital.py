@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from math import erf, sqrt
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -794,19 +795,18 @@ else:
 st.markdown("<h2>Decisión · GO / ITERATE / KILL</h2>", unsafe_allow_html=True)
 
 # Umbrales del experimento (ver doc de diseño)
-TRACCION_GO = 0.40       # ≥ 40% interés activo → GO
+TRACCION_GO = 0.40       # ≥ 40% → GO
 TRACCION_KILL = 0.20     # < 20% → KILL · 20–40% → ITERATE
-ELASTICIDAD_PP = 20      # ≥ 20pp accionable entre variantes
+ELASTICIDAD_PP = 20      # ≥ 20pp accionable por umbral
+P_VALUE_SIG = 0.05       # significancia estadistica para z-test
 
-# Tracción pooled: % de leads con T&C que terminaron en interés activo. Usamos
-# "elegibles sin hipoteca" como proxy de interés activo accionable (sigue la
-# definición de "Aplican" del funnel — score≥720 y sin hipoteca previa).
-n_tc = len(df_in)
-n_aplican_neto = int(
-    df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"]).sum()
-    - df_in[df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"])]["con_hipoteca"].sum()
-)
-traccion = n_aplican_neto / n_tc if n_tc > 0 else 0.0
+# Tracción pooled: % de leads con T&C que aplican. Usamos la columna Aplica
+# del Sheet directamente (el motor de riesgo ya considera score >= 720 y demás
+# reglas internas); no re-filtramos por hipoteca aquí porque el dato de
+# hipoteca solo existe para los entrevistados.
+n_tc = len(df_leads)
+n_aplican = int((df_leads["aplica"].astype(str).str.lower() == "si").sum())
+traccion = n_aplican / n_tc if n_tc > 0 else 0.0
 
 if traccion >= TRACCION_GO:
     decision = "GO"
@@ -833,16 +833,56 @@ def _conv_variante(var: str) -> tuple[int, int, float]:
     return n_u, n_tc_v, conv
 
 
+def _z_test_two_proportions(s1: int, n1: int, s2: int, n2: int) -> tuple[float, float]:
+    """Z-test de proporciones, una cola en dirección BH > AH.
+
+    Devuelve (z, p_value). z positivo → BH > AH.
+    """
+    if n1 == 0 or n2 == 0:
+        return 0.0, 1.0
+    p1, p2 = s1 / n1, s2 / n2
+    p_pool = (s1 + s2) / (n1 + n2)
+    if p_pool in (0.0, 1.0):
+        return 0.0, 1.0
+    se = (p_pool * (1 - p_pool) * (1 / n1 + 1 / n2)) ** 0.5
+    if se == 0:
+        return 0.0, 1.0
+    z = (p2 - p1) / se
+    # p-value una cola: P(Z > z) con la normal estándar
+    p_value = 0.5 * (1 - erf(z / sqrt(2)))
+    return z, p_value
+
+
 n_ah, tc_ah, conv_ah = _conv_variante("AH")
 n_bh, tc_bh, conv_bh = _conv_variante("BH")
 diff_pp = (conv_bh - conv_ah) * 100
+z_stat, p_value = _z_test_two_proportions(tc_ah, n_ah, tc_bh, n_bh)
 
-if abs(diff_pp) >= ELASTICIDAD_PP:
+# Lógica de recomendación de plazo:
+# 1) Si la diferencia es estadísticamente significativa (p < 0.05) → mayor.
+# 2) Si |diff| ≥ 20pp → mayor (umbral predefinido del experimento).
+# 3) Si BH > AH direccionalmente → BH (señal de producto: cliente prefiere
+#    cuota más baja con plazo más largo; criterio empírico del experimento
+#    original, donde BH fue elegido a pesar de diff < 20pp por dirección clara).
+# 4) Si AH ≥ BH → AH por menor exposición de riesgo.
+if p_value < P_VALUE_SIG and conv_bh > conv_ah:
+    plazo_pick = "BH (120 meses)"
+    plazo_razon = f"z={z_stat:.2f} · p={p_value:.3f} · BH > AH estadísticamente significativo"
+elif (1 - p_value) < P_VALUE_SIG and conv_ah > conv_bh:
+    plazo_pick = "AH (84 meses)"
+    plazo_razon = f"z={z_stat:.2f} · p={1-p_value:.3f} · AH > BH estadísticamente significativo"
+elif abs(diff_pp) >= ELASTICIDAD_PP:
     plazo_pick = "BH (120 meses)" if diff_pp > 0 else "AH (84 meses)"
-    plazo_razon = f"diff {abs(diff_pp):.1f}pp ≥ {ELASTICIDAD_PP}pp · accionable"
+    plazo_razon = f"diff {abs(diff_pp):.1f}pp ≥ {ELASTICIDAD_PP}pp · accionable por umbral"
+elif conv_bh > conv_ah:
+    plazo_pick = "BH (120 meses)"
+    plazo_razon = (
+        f"diff {abs(diff_pp):.1f}pp · BH direccionalmente mejor (z={z_stat:.2f}, p={p_value:.3f}) · "
+        "señal de producto consistente"
+    )
 else:
     plazo_pick = "AH (84 meses)"
-    plazo_razon = f"diff {abs(diff_pp):.1f}pp < {ELASTICIDAD_PP}pp · default por menor exposición"
+    plazo_razon = f"AH ≥ BH · default por menor exposición de riesgo"
 
 # Tarjeta de decisión
 st.markdown(
@@ -870,8 +910,8 @@ col_d1, col_d2 = st.columns(2)
 with col_d1:
     st.markdown(f"<h3 style='color:{DEEP};font-size:1rem;margin:8px 0 6px 0'>Tracción · cálculo</h3>", unsafe_allow_html=True)
     df_tr = pd.DataFrame({
-        "Métrica": ["Leads con T&C", "Aplican (score≥720 sin hipoteca)", "% Tracción"],
-        "Valor": [f"{n_tc}", f"{n_aplican_neto}", f"{traccion*100:.1f}%"],
+        "Métrica": ["Leads con T&C", "Aplican (Aplica=si)", "% Tracción"],
+        "Valor": [f"{n_tc}", f"{n_aplican}", f"{traccion*100:.1f}%"],
     })
     st.dataframe(df_tr, hide_index=True, use_container_width=True)
     st.caption(f"Umbrales · ≥{TRACCION_GO*100:.0f}% GO · {TRACCION_KILL*100:.0f}–{TRACCION_GO*100:.0f}% ITERATE · <{TRACCION_KILL*100:.0f}% KILL")
@@ -885,7 +925,10 @@ with col_d2:
         "Conv T&C": [f"{conv_ah*100:.2f}%", f"{conv_bh*100:.2f}%"],
     })
     st.dataframe(df_el, hide_index=True, use_container_width=True)
-    st.caption(f"Diferencia accionable si |BH − AH| ≥ {ELASTICIDAD_PP}pp · default AH por menor exposición")
+    st.caption(
+        f"z={z_stat:.2f} · p={p_value:.3f} (una cola, H₁: BH > AH). "
+        f"Recomendar BH si p<0.05 ó BH > AH direccionalmente · AH solo si AH ≥ BH."
+    )
 
 with st.expander("Matriz de lectura"):
     st.markdown(

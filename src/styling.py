@@ -43,6 +43,23 @@ def inject_base_css() -> None:
         margin-top:18px !important;
         margin-bottom:4px !important;
       }}
+      /* Reemplaza el texto "streamlit app" del nav lateral por un SVG de casa */
+      [data-testid="stSidebarNav"] ul li:first-child a span {{
+        font-size: 0 !important;
+        display: inline-block;
+        line-height: 0;
+      }}
+      [data-testid="stSidebarNav"] ul li:first-child a span::before {{
+        content: '';
+        display: inline-block;
+        width: 22px;
+        height: 22px;
+        vertical-align: middle;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23E0AAFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/><polyline points='9 22 9 12 15 12 15 22'/></svg>");
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: contain;
+      }}
       h1, h2, h3 {{ color:{DEEP}; }}
       h2 {{
         font-size:1rem; font-weight:700; margin:28px 0 10px 0;
