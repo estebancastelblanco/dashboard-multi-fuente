@@ -155,21 +155,21 @@ Los 4 del dashboard original (`/Users/usermac/Hc/resultadosfakedoor/dashboard.py
 
 Cada filtro narrows down `df_hs` y propaga al funnel, distribuciones, pipeline y tabla raw.
 
-### Funnel (9 etapas, todas live)
+### Funnel (7 etapas live, sin filtro de fecha)
 
 | # | Etapa | Cómo se computa |
 |---|---|---|
-| 1 | Leads elegibles | `len(df_hs)` con flag_fakedoor + createdate ≥ 2026-04-20 |
-| 2 | Enviados WA | `len(df_hs)` con `nombre_del_conjunto` ≠ vacío |
-| 3 | Entregados WA | `77% × Enviados` (constante de Infobip — no hay API live) |
-| 4 | Abrieron WA | `len(BQ pages uuids ∩ HS allowed_uuids)` |
-| 5 | Clicks landing | `len(BQ tracks uuids ∩ HS allowed_uuids)` |
-| 6 | T&C firmados | `len(Leads sheet ∩ HS allowed_uuids)` |
-| 7 | Interés activo | `Leads where contesto? == "si"` |
-| 8 | Aprobados riesgo | `Leads where Aplica == "si"` (lee del Sheet o del API) |
-| 9 | Elegibles | aprobados − `tiene hipoteca? == "si"` |
+| 1 | Universo (flag fakedoor) | `len(df_hs)` con `flag_fakedoor HAS_PROPERTY` — sin filtro de fecha |
+| 2 | Con nombre del conjunto | `df_hs` donde `nombre_del_conjunto` ≠ vacío |
+| 3 | Enviados WA | `77% × Con conjunto` (constante histórica de Infobip — no hay API live) |
+| 4 | Abrieron página | `len(BQ pages uuids ∩ HS allowed_uuids)` |
+| 5 | T&C firmados | `len(Sheets/Leads ∩ HS allowed_uuids)` |
+| 6 | Elegibles | `Leads where Aplica = "si"` |
+| 7 | Aplican (sin hipoteca) | Elegibles − `tiene hipoteca? == "si"` |
 
 Hover en cada barra muestra el porcentaje vs etapa previa y la fuente del dato.
+
+Las métricas de **usabilidad de la landing** (tracks events, llegaron a consentimiento, total eventos) van en una sección aparte debajo del funnel, alimentadas por BigQuery.
 
 ### Pipeline de leads (la vista clave)
 

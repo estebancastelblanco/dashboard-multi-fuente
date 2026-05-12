@@ -25,6 +25,24 @@ def inject_base_css() -> None:
       html, body, [data-testid="stAppViewContainer"] {{ background:{BG}; }}
       [data-testid="stSidebar"] {{ background:{DEEP}; border-right: 1px solid {MED}; }}
       [data-testid="stSidebar"] *, [data-testid="stSidebar"] label {{ color:{PALE} !important; }}
+      [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] {{
+        background:{MED} !important;
+        color:#fff !important;
+      }}
+      [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] span {{
+        color:#fff !important;
+      }}
+      [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] {{
+        background:#fff;
+      }}
+      [data-testid="stSidebar"] .stMarkdown h3 {{
+        color:{LIGHT} !important;
+        font-size:0.78rem !important;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+        margin-top:18px !important;
+        margin-bottom:4px !important;
+      }}
       h1, h2, h3 {{ color:{DEEP}; }}
       h2 {{
         font-size:1rem; font-weight:700; margin:28px 0 10px 0;

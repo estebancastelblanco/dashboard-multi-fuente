@@ -40,17 +40,37 @@ FUENTES = ["Top", "MM + Inmo", "Rechazos Comite", "Rechazos Remo"]
 
 
 def compute_fuente(row) -> str:
-    """Clasifica un deal en una de 4 fuentes (replica logica de resultadosfakedoor/dashboard.py)."""
+    """Clasifica un deal en una de 4 fuentes (replica logica de resultadosfakedoor/dashboard.py).
+
+    Para la comparacion con 'Descartado por comité' usa la columna *_label*
+    si existe (post-decode de internal values); fallback al valor crudo.
+    """
     flag = str(row.get("flag_fakedoor", "")).strip()
     if flag == "Top":
         return "Top"
     remo = str(row.get("comite_remodelaciones", "")).strip()
     if remo and remo not in ("nan",) and remo in REMO_VALUES:
         return "Rechazos Remo"
-    op = str(row.get("oportunidad_del_negocio", "")).strip()
+    op = str(
+        row.get("oportunidad_del_negocio_label", row.get("oportunidad_del_negocio", ""))
+    ).strip()
     if op == "Descartado por comité":
         return "Rechazos Comite"
     return "MM + Inmo"
+
+
+def fetch_property_options(property_name: str) -> dict[str, str]:
+    """Devuelve mapping internal_value -> label para una propiedad enum de Deal.
+
+    HubSpot devuelve `1`, `2`, `descartado_por_comite` etc en la API; el dashboard
+    debe mostrar el label legible. Cachear en streamlit con TTL alto (1h).
+    """
+    url = f"https://api.hubapi.com/crm/v3/properties/deals/{property_name}"
+    resp = requests.get(url, headers=_headers(), timeout=20)
+    resp.raise_for_status()
+    body = resp.json()
+    return {opt["value"]: opt.get("label", opt["value"])
+            for opt in body.get("options", []) if "value" in opt}
 
 
 def _token() -> str:
@@ -80,25 +100,24 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"}
 
 
-def fetch_fakedoor_deals(since_iso: str = "2026-04-20") -> pd.DataFrame:
-    """Trae deals con flag_fakedoor IS_NOT_EMPTY y createdate >= since_iso.
+def fetch_fakedoor_deals(since_iso: str | None = None) -> pd.DataFrame:
+    """Trae deals con flag_fakedoor IS_NOT_EMPTY.
 
+    Si `since_iso` se pasa, agrega filtro createdate >= since_iso.
     Pagina 100 a la vez hasta agotar resultados. Devuelve un DataFrame con
     las columnas internas (snake_case) que el dashboard sabrá renombrar.
     """
-    since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
     properties = list(FAKEDOOR_PROPS.keys())
     url = "https://api.hubapi.com/crm/v3/objects/deals/search"
     rows: list[dict] = []
     after: str | None = None
+    filters: list[dict] = [{"propertyName": "flag_fakedoor", "operator": "HAS_PROPERTY"}]
+    if since_iso:
+        since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        filters.append({"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)})
     for _ in range(50):  # max 5000 deals
         payload = {
-            "filterGroups": [{
-                "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
-                    {"propertyName": "flag_fakedoor", "operator": "HAS_PROPERTY"},
-                ],
-            }],
+            "filterGroups": [{"filters": filters}],
             "properties": properties,
             "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
             "limit": 100,

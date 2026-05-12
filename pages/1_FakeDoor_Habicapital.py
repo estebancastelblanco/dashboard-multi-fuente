@@ -67,7 +67,20 @@ def _norm_phone(s: object) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner="HubSpot · deals fakedoor…")
 def load_hs_deals() -> pd.DataFrame:
-    return hs_src.fetch_fakedoor_deals(since_iso=EXPERIMENT.start_date)
+    # Sin filtro de fecha — universo = todos los deals con flag_fakedoor.
+    return hs_src.fetch_fakedoor_deals(since_iso=None)
+
+
+@st.cache_data(ttl=3600, show_spinner="HubSpot · catálogo de propiedades…")
+def load_property_labels() -> dict[str, dict[str, str]]:
+    """value→label por propiedad enum. Se cachea 1h porque casi nunca cambia."""
+    result: dict[str, dict[str, str]] = {}
+    for prop in ("estado", "oportunidad_del_negocio"):
+        try:
+            result[prop] = hs_src.fetch_property_options(prop)
+        except Exception:
+            result[prop] = {}
+    return result
 
 
 @st.cache_data(ttl=120, show_spinner="Leads + scores (Sheet cache)…")
@@ -87,27 +100,13 @@ def load_entrevistas() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=180, show_spinner="Infobip (envios WA)…")
-def load_infobip_phones() -> set[str]:
-    df = gs_src.fetch_tab("Infobip")
-    if df.empty:
-        return set()
-    phones: set[str] = set()
-    for col in df.columns:
-        for v in df[col].astype(str):
-            p = _norm_phone(v)
-            if p and p.isdigit() and len(p) == 10:
-                phones.add(p)
-    return phones
-
-
 @st.cache_data(ttl=300, show_spinner="BigQuery · eventos de landing…")
 def load_landing_events() -> pd.DataFrame:
     try:
         return bq_src.fetch_fakedoor_landing_events()
     except Exception as exc:
         st.warning(f"BigQuery falló: {type(exc).__name__}: {exc}")
-        return pd.DataFrame(columns=["uuid", "total_events", "reached_consent"])
+        return pd.DataFrame(columns=["uuid", "total_events", "had_pages", "had_tracks", "reached_consent"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,35 +125,45 @@ if df_leads.empty:
 df_int = load_entrevistas()
 try:
     df_hs = load_hs_deals()
+    labels_map = load_property_labels()
 except Exception as exc:
     df_hs = pd.DataFrame()
+    labels_map = {"estado": {}, "oportunidad_del_negocio": {}}
     st.warning(f"HubSpot no disponible: {type(exc).__name__}: {exc}")
 
-infobip_phones = load_infobip_phones()
 df_bq = load_landing_events()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Enriquecer HubSpot con fuente
+# Decode internal IDs → labels en HubSpot
 # ─────────────────────────────────────────────────────────────────────────────
 if not df_hs.empty:
+    estado_map = labels_map.get("estado", {})
+    oport_map = labels_map.get("oportunidad_del_negocio", {})
+    df_hs["estado_label"] = df_hs.get("estado", pd.Series(dtype=str)).map(estado_map).fillna(df_hs.get("estado"))
+    df_hs["oportunidad_del_negocio_label"] = (
+        df_hs.get("oportunidad_del_negocio", pd.Series(dtype=str))
+        .map(oport_map)
+        .fillna(df_hs.get("oportunidad_del_negocio"))
+    )
     df_hs["fuente"] = df_hs.apply(hs_src.compute_fuente, axis=1)
     df_hs["phone_norm"] = df_hs.get("phone", pd.Series(dtype=str)).apply(_norm_phone)
 else:
     df_hs["fuente"] = pd.Series(dtype=str)
+    df_hs["estado_label"] = pd.Series(dtype=str)
+    df_hs["oportunidad_del_negocio_label"] = pd.Series(dtype=str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Filtros (sidebar)
+# Filtros (sidebar) — usan los labels, no los IDs
 # ─────────────────────────────────────────────────────────────────────────────
 def _unique(series: pd.Series) -> list[str]:
     return sorted([s for s in series.dropna().astype(str).unique() if s])
 
 
 variantes_all = _unique(df_hs.get("ab_test_landing", pd.Series(dtype=str)))
-fuentes_all = [f for f in hs_src.FUENTES if f in set(df_hs.get("fuente", pd.Series()).dropna().unique())]
-estados_all = _unique(df_hs.get("estado", pd.Series(dtype=str)))
-oport_all = _unique(df_hs.get("oportunidad_del_negocio", pd.Series(dtype=str)))
+estados_all = _unique(df_hs.get("estado_label", pd.Series(dtype=str)))
+oport_all = _unique(df_hs.get("oportunidad_del_negocio_label", pd.Series(dtype=str)))
 
 with st.sidebar:
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
@@ -162,7 +171,7 @@ with st.sidebar:
     st.markdown("### Variante")
     sel_variantes = st.multiselect(
         "variantes", variantes_all, default=variantes_all,
-        label_visibility="collapsed", help="ab_test_landing en HubSpot"
+        label_visibility="collapsed",
     )
 
     st.markdown("### Fuente")
@@ -179,10 +188,10 @@ with st.sidebar:
     sel_estados = st.multiselect("estados", estados_all, default=estados_all, label_visibility="collapsed")
 
     st.markdown("---")
-    st.caption("Los filtros aplican sobre la base HubSpot y propagan al funnel, distribuciones, pipeline y tabla de deals.")
+    st.caption("Filtros aplican sobre el universo HubSpot y propagan al funnel, distribuciones y pipeline.")
 
 
-# Aplicar filtros sobre df_hs
+# Aplicar filtros
 df_hs_f = df_hs.copy()
 if not df_hs_f.empty:
     if len(sel_variantes) < len(variantes_all):
@@ -190,9 +199,9 @@ if not df_hs_f.empty:
     if len(sel_fuentes) < len(hs_src.FUENTES):
         df_hs_f = df_hs_f[df_hs_f["fuente"].isin(sel_fuentes)]
     if len(sel_oport) < len(oport_all):
-        df_hs_f = df_hs_f[df_hs_f["oportunidad_del_negocio"].isin(sel_oport) | df_hs_f["oportunidad_del_negocio"].isna()]
+        df_hs_f = df_hs_f[df_hs_f["oportunidad_del_negocio_label"].isin(sel_oport) | df_hs_f["oportunidad_del_negocio_label"].isna()]
     if len(sel_estados) < len(estados_all):
-        df_hs_f = df_hs_f[df_hs_f["estado"].isin(sel_estados) | df_hs_f["estado"].isna()]
+        df_hs_f = df_hs_f[df_hs_f["estado_label"].isin(sel_estados) | df_hs_f["estado_label"].isna()]
 
 allowed_uuids: set[str] = set(df_hs_f["deal_uuid"].dropna().astype(str)) if not df_hs_f.empty else set()
 
@@ -206,7 +215,6 @@ if not df_int.empty:
 else:
     df["tiene hipoteca?"] = None
 
-# Trae fuente + variante del HubSpot
 if not df_hs_f.empty and "deal_uuid" in df_hs_f.columns:
     df = df.merge(
         df_hs_f[["deal_uuid", "fuente", "ab_test_landing"]].rename(
@@ -218,7 +226,6 @@ else:
     df["fuente"] = None
     df["variante_hs"] = None
 
-# Filtra leads a los uuids permitidos por el filtro HubSpot
 if allowed_uuids:
     df_in = df[df["uuid_str"].isin(allowed_uuids)].copy()
 else:
@@ -270,15 +277,14 @@ n_aplica = int(df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llam
 n_call_list = int((df_in["status"] == "aplica_pendiente_llamar").sum())
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.markdown(kpi_card("Universo HS", f"{n_universe:,}", "fakedoor + ≥20 abr"), unsafe_allow_html=True)
+c1.markdown(kpi_card("Universo HS", f"{n_universe:,}", "todos con flag_fakedoor"), unsafe_allow_html=True)
 c2.markdown(kpi_card("Leads T&C", n_leads, "firmaron formulario"), unsafe_allow_html=True)
 c3.markdown(kpi_card("Contactados", n_contactados, f"{n_contactados/max(1,n_leads):.0%}"), unsafe_allow_html=True)
 c4.markdown(kpi_card("Interés activo", n_interes, f"{n_interes/max(1,n_leads):.0%}"), unsafe_allow_html=True)
-c5.markdown(kpi_card("Elegibles", n_aplica, "≥720 + sin hipoteca"), unsafe_allow_html=True)
+c5.markdown(kpi_card("Elegibles", n_aplica, "score≥720"), unsafe_allow_html=True)
 c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allow_html=True)
 
 
-# Persistence panel
 with st.expander("Estado de consulta de scores", expanded=False):
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("API configurado", "Sí" if score_stats.get("api_configured") else "No")
@@ -291,66 +297,55 @@ with st.expander("Estado de consulta de scores", expanded=False):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Funnel LIVE
+# Funnel (7 etapas, todo live, sin filtro de fecha)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Embudo del experimento</h2>", unsafe_allow_html=True)
 
-# BQ desglosado
-pages_uuids = set(df_bq[df_bq["had_pages"] == 1]["uuid"].dropna().astype(str)) if not df_bq.empty and "had_pages" in df_bq.columns else set()
-tracks_uuids = set(df_bq[df_bq["had_tracks"] == 1]["uuid"].dropna().astype(str)) if not df_bq.empty and "had_tracks" in df_bq.columns else set()
-# Fallback si la query antigua aun cachea sin las columnas nuevas
+pages_uuids = set(df_bq[df_bq.get("had_pages", 0) == 1]["uuid"].dropna().astype(str)) if not df_bq.empty else set()
 if not pages_uuids and not df_bq.empty and "uuid" in df_bq.columns:
     pages_uuids = set(df_bq["uuid"].dropna().astype(str))
 
-# Etapa 1: Leads elegibles = universo HS filtrado
+# Etapa 1: Universo (HS flag_fakedoor)
 n_e1 = n_universe
-# Etapa 2: Enviados WA = los que tienen nombre del conjunto en HubSpot
+# Etapa 2: Con nombre del conjunto
 if not df_hs_f.empty and "nombre_del_conjunto" in df_hs_f.columns:
     n_e2 = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum())
 else:
     n_e2 = 0
-# Etapa 3: Entregados WA = 77% historico de Enviados (no hay API Infobip live)
+# Etapa 3: Enviados WA = 77% × Con conjunto (Infobip delivery historico)
 delivery_ratio = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.77)
 n_e3 = int(round(n_e2 * delivery_ratio))
-# Etapa 4: Abrieron WA = uuids con page-view en BQ ∩ HS allowed
+# Etapa 4: Abrieron pagina (BQ pages ∩ HS allowed)
 if allowed_uuids and pages_uuids:
     n_e4 = len(allowed_uuids & pages_uuids)
 else:
     n_e4 = len(pages_uuids) if not allowed_uuids else 0
-# Etapa 5: Clicks landing = uuids con track-event en BQ ∩ HS allowed
-if allowed_uuids and tracks_uuids:
-    n_e5 = len(allowed_uuids & tracks_uuids)
-else:
-    n_e5 = len(tracks_uuids) if not allowed_uuids else 0
-# Etapa 6: T&C firmados
-n_e6 = n_leads
-# Etapa 7: Interes activo
-n_e7 = n_interes
-# Etapa 8: Aprobados riesgo
-n_e8 = n_aplica
-# Etapa 9: Elegibles (sin hipoteca)
-n_e9 = n_aplica - int(df_in["con_hipoteca"].sum())
+# Etapa 5: T&C firmados (Sheet ∩ HS)
+n_e5 = n_leads
+# Etapa 6: Elegibles (aplica = "si")
+n_e6 = n_aplica
+# Etapa 7: Aplican (elegibles sin hipoteca)
+n_e7 = n_aplica - int(df_in["con_hipoteca"].sum())
 
 stages = [
-    ("Leads elegibles",      n_e1, "HubSpot · flag_fakedoor + ≥20 abr"),
-    ("Enviados WA",          n_e2, "HubSpot · con nombre del conjunto"),
-    (f"Entregados WA",       n_e3, f"Estimado · {int(delivery_ratio*100)}% × Enviados"),
-    ("Abrieron WA",          n_e4, "BigQuery · pages ∩ HS"),
-    ("Clicks landing",       n_e5, "BigQuery · tracks ∩ HS"),
-    ("T&C firmados",         n_e6, "Sheets/Leads ∩ HS"),
-    ("Interés activo",       n_e7, "Sheets/Leads · contesto?=si"),
-    ("Aprobados riesgo",     n_e8, "Sheet+API · Aplica=si"),
-    ("Elegibles",            n_e9, "Aprobados sin hipoteca"),
+    ("Universo (flag fakedoor)",   n_e1, "HubSpot · sin filtro de fecha"),
+    ("Con nombre del conjunto",    n_e2, "HubSpot · nombre_del_conjunto ≠ vacío"),
+    (f"Enviados WA",                n_e3, f"Estimado · {int(delivery_ratio*100)}% × Con conjunto"),
+    ("Abrieron página",             n_e4, "BigQuery · pages ∩ HS"),
+    ("T&C firmados",                n_e5, "Sheets/Leads ∩ HS"),
+    ("Elegibles",                   n_e6, "Aplica=si"),
+    ("Aplican (sin hipoteca)",      n_e7, "Aplica=si + tiene hipoteca≠si"),
 ]
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
 f_sources = [s[2] for s in stages]
-f_colors = [DEEP, PRIMARY, MED, ACCENT, LIGHT, "#9ecae1", GREEN_DARK, "#1a7a50", "#0f5535"][:len(stages)]
+f_colors = [DEEP, PRIMARY, MED, ACCENT, LIGHT, GREEN_DARK, "#0f5535"][:len(stages)]
 f_text = [
     f"{v:,}  ({v/f_vals[i-1]*100:.0f}%)" if i > 0 and f_vals[i-1] > 0 else f"{v:,}"
     for i, v in enumerate(f_vals)
 ]
-use_log = (max(f_vals) if f_vals else 0) > 100 and (min([v for v in f_vals if v > 0], default=0) > 0)
+nonzero = [v for v in f_vals if v > 0]
+use_log = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
 fig_funnel = go.Figure(go.Bar(
     x=f_vals, y=f_labels, orientation="h",
     marker_color=f_colors, text=f_text,
@@ -361,7 +356,7 @@ fig_funnel = go.Figure(go.Bar(
 fig_funnel.update_layout(
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=440, margin=dict(l=10, r=230, t=10, b=10),
+    height=380, margin=dict(l=10, r=230, t=10, b=10),
     xaxis=dict(type="log" if use_log else "linear",
                title="Clientes" + (" (log)" if use_log else ""),
                gridcolor="#ede8f5", tickformat=",d"),
@@ -371,70 +366,108 @@ st.plotly_chart(fig_funnel, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Distribuciones
+# Distribución de leads (side-by-side, todas las categorias)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Distribución del universo (con filtros aplicados)</h2>", unsafe_allow_html=True)
-
-
-def _pie(values: pd.Series, title: str, palette: list[str]):
-    counts = values.fillna("(sin valor)").astype(str).replace("", "(sin valor)").value_counts()
-    fig = go.Figure(go.Pie(
-        labels=counts.index, values=counts.values,
-        hole=0.42, marker_colors=palette,
-        textinfo="label+percent+value", textfont_size=10,
-    ))
-    fig.update_layout(
-        paper_bgcolor=WHITE, plot_bgcolor=WHITE, showlegend=False,
-        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        title=dict(text=title, font=dict(size=12, color=DEEP)),
-        height=260, margin=dict(l=5, r=5, t=36, b=5),
-    )
-    return fig
-
+st.markdown("<h2>Distribución de leads</h2>", unsafe_allow_html=True)
 
 if df_hs_f.empty:
     st.info("No hay deals con los filtros actuales.")
 else:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.plotly_chart(_pie(df_hs_f["fuente"], "Fuente", [DEEP, PRIMARY, MED, ACCENT]), use_container_width=True)
-        st.plotly_chart(_pie(df_hs_f["ab_test_landing"], "Variante A/B", [PRIMARY, ACCENT, PALE, LIGHT]), use_container_width=True)
-    with col_b:
-        if "oportunidad_del_negocio" in df_hs_f.columns:
-            # Barras horizontales en lugar de pie (suele haber muchas categorías)
-            op_c = df_hs_f["oportunidad_del_negocio"].fillna("(sin valor)").value_counts().reset_index()
-            op_c.columns = ["Oportunidad", "N"]
-            op_c = op_c.sort_values("N", ascending=True).tail(10)
-            fig_op = go.Figure(go.Bar(
-                x=op_c["N"], y=op_c["Oportunidad"], orientation="h",
-                marker=dict(color=op_c["N"], colorscale=[[0, PALE], [1, PRIMARY]], showscale=False),
-                text=op_c["N"], textposition="outside", textfont_size=10,
+    def _hbar(series: pd.Series, title: str, palette: tuple[str, str]):
+        c = series.fillna("(sin valor)").astype(str).replace("", "(sin valor)").value_counts().reset_index()
+        c.columns = ["cat", "N"]
+        c = c.sort_values("N", ascending=True)
+        fig = go.Figure(go.Bar(
+            x=c["N"], y=c["cat"], orientation="h",
+            marker=dict(
+                color=c["N"],
+                colorscale=[[0, palette[0]], [1, palette[1]]],
+                showscale=False,
+            ),
+            text=c["N"], textposition="outside", textfont_size=10,
+        ))
+        fig.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
+            height=max(280, len(c) * 24 + 80),
+            margin=dict(l=10, r=50, t=44, b=10),
+            yaxis=dict(gridcolor="#ede8f5"),
+            xaxis=dict(gridcolor="#ede8f5"),
+        )
+        return fig
+
+    col_op, col_es = st.columns(2)
+    with col_op:
+        st.plotly_chart(_hbar(df_hs_f["oportunidad_del_negocio_label"],
+                              "Oportunidad del negocio (CO)", (PALE, PRIMARY)),
+                        use_container_width=True)
+    with col_es:
+        st.plotly_chart(_hbar(df_hs_f["estado_label"],
+                              "Estado del negocio", (PALE, MED)),
+                        use_container_width=True)
+
+    # Tercera fila: Fuente + Variante como pies pequeños
+    col_f, col_v = st.columns(2)
+    with col_f:
+        f_c = df_hs_f["fuente"].value_counts().reindex(hs_src.FUENTES).dropna().reset_index()
+        f_c.columns = ["Fuente", "N"]
+        if not f_c.empty:
+            fig_f = go.Figure(go.Pie(
+                labels=f_c["Fuente"], values=f_c["N"],
+                hole=0.42, marker_colors=[DEEP, PRIMARY, MED, ACCENT],
+                textinfo="label+percent+value", textfont_size=10,
             ))
-            fig_op.update_layout(
-                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                title=dict(text="Oportunidad del negocio (top 10)", font=dict(size=12, color=DEEP)),
-                height=260, margin=dict(l=5, r=40, t=36, b=5),
-                yaxis=dict(gridcolor="#ede8f5"), xaxis=dict(gridcolor="#ede8f5"),
+            fig_f.update_layout(
+                paper_bgcolor=WHITE, showlegend=False,
+                title=dict(text="Fuente", font=dict(size=13, color=DEEP)),
+                height=260, margin=dict(l=5, r=5, t=44, b=5),
             )
-            st.plotly_chart(fig_op, use_container_width=True)
-        if "estado" in df_hs_f.columns:
-            es_c = df_hs_f["estado"].fillna("(sin valor)").value_counts().reset_index()
-            es_c.columns = ["Estado", "N"]
-            es_c = es_c.sort_values("N", ascending=True).tail(10)
-            fig_es = go.Figure(go.Bar(
-                x=es_c["N"], y=es_c["Estado"], orientation="h",
-                marker=dict(color=es_c["N"], colorscale=[[0, PALE], [1, MED]], showscale=False),
-                text=es_c["N"], textposition="outside", textfont_size=10,
+            st.plotly_chart(fig_f, use_container_width=True)
+    with col_v:
+        v_c = df_hs_f["ab_test_landing"].fillna("Sin asignar").value_counts().reset_index()
+        v_c.columns = ["Variante", "N"]
+        if not v_c.empty:
+            fig_v = go.Figure(go.Pie(
+                labels=v_c["Variante"], values=v_c["N"],
+                hole=0.42, marker_colors=[PRIMARY, ACCENT, PALE, LIGHT],
+                textinfo="label+percent+value", textfont_size=10,
             ))
-            fig_es.update_layout(
-                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                title=dict(text="Estado del negocio (top 10)", font=dict(size=12, color=DEEP)),
-                height=260, margin=dict(l=5, r=40, t=36, b=5),
-                yaxis=dict(gridcolor="#ede8f5"), xaxis=dict(gridcolor="#ede8f5"),
+            fig_v.update_layout(
+                paper_bgcolor=WHITE, showlegend=False,
+                title=dict(text="Variante A/B", font=dict(size=13, color=DEEP)),
+                height=260, margin=dict(l=5, r=5, t=44, b=5),
             )
-            st.plotly_chart(fig_es, use_container_width=True)
+            st.plotly_chart(fig_v, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Usabilidad de la landing (BigQuery)
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Usabilidad de la landing (BigQuery)</h2>", unsafe_allow_html=True)
+
+if df_bq.empty:
+    st.info("BigQuery no devolvió eventos de la landing.")
+else:
+    # Filtra a UUIDs del universo HS si hay filtros aplicados
+    df_bq_in = df_bq.copy()
+    if allowed_uuids:
+        df_bq_in = df_bq_in[df_bq_in["uuid"].astype(str).isin(allowed_uuids)]
+
+    n_visited = len(df_bq_in)
+    n_with_tracks = int(df_bq_in.get("had_tracks", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+    n_consent = int(df_bq_in.get("reached_consent", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+    total_events = int(df_bq_in.get("total_events", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+
+    u1, u2, u3, u4 = st.columns(4)
+    u1.markdown(kpi_card("UUIDs visitaron", f"{n_visited:,}", "BQ pages + tracks"), unsafe_allow_html=True)
+    u2.markdown(kpi_card("Con tracks events", f"{n_with_tracks:,}", "= interactuaron"), unsafe_allow_html=True)
+    u3.markdown(kpi_card("Llegaron a consentimiento", f"{n_consent:,}", "URL /consentimiento/"), unsafe_allow_html=True)
+    u4.markdown(kpi_card("Total eventos", f"{total_events:,}", "pages + tracks"), unsafe_allow_html=True)
+
+    with st.expander("Top 15 UUIDs por eventos", expanded=False):
+        top = df_bq_in.sort_values("total_events", ascending=False).head(15)
+        st.dataframe(top, hide_index=True, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,13 +533,25 @@ if df_hs_f.empty:
     st.info("Sin deals con los filtros aplicados.")
 else:
     show_cols = [
-        "dealname", "phone", "createdate", "estado",
+        "dealname", "phone", "createdate", "estado_label",
         "fuente", "flag_fakedoor", "ab_test_landing",
-        "oportunidad_del_negocio", "nombre_del_conjunto",
+        "oportunidad_del_negocio_label", "nombre_del_conjunto",
         "comite_remodelaciones", "deal_uuid",
     ]
     show_cols = [c for c in show_cols if c in df_hs_f.columns]
-    df_hs_display = df_hs_f[show_cols].rename(columns={**hs_src.FAKEDOOR_PROPS, "fuente": "Fuente"})
+    df_hs_display = df_hs_f[show_cols].rename(columns={
+        "dealname": "Nombre del negocio",
+        "phone": "Teléfono",
+        "createdate": "Fecha de creación",
+        "estado_label": "Estado del Negocio",
+        "fuente": "Fuente",
+        "flag_fakedoor": "flag fakedoor",
+        "ab_test_landing": "Variante",
+        "oportunidad_del_negocio_label": "Oportunidad del Negocio",
+        "nombre_del_conjunto": "Nombre del conjunto",
+        "comite_remodelaciones": "Comité remodelaciones",
+        "deal_uuid": "deal_uuid",
+    })
     st.dataframe(df_hs_display, hide_index=True, use_container_width=True)
 
     with st.expander("Debug · propiedades vacías"):
@@ -520,14 +565,13 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Insights de entrevistas (en lugar de la tabla)
+# Insights de entrevistas
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Insights · entrevistas cualitativas</h2>", unsafe_allow_html=True)
 
 if df_int.empty:
     st.info("La pestaña Entrevista está vacía.")
 else:
-    # Filtra entrevistas a las que pertenecen a los leads filtrados
     if allowed_uuids:
         leads_phones = set(df_in["phone_norm"].dropna().astype(str))
         df_int_f = df_int[df_int["phone_norm"].isin(leads_phones)].copy()
@@ -541,8 +585,18 @@ else:
         with col_pie:
             hip_vals = df_int_f["tiene hipoteca?"].fillna("(sin dato)").astype(str).str.strip().str.lower()
             hip_vals = hip_vals.replace({"si": "Sí", "sí": "Sí", "no": "No", "": "(sin dato)"})
-            st.plotly_chart(_pie(hip_vals, "¿Tiene hipoteca?", [GREEN_DARK, ACCENT, "#bbb"]),
-                            use_container_width=True)
+            hip_counts = hip_vals.value_counts()
+            fig_hip = go.Figure(go.Pie(
+                labels=hip_counts.index, values=hip_counts.values,
+                hole=0.42, marker_colors=[GREEN_DARK, ACCENT, "#bbb"],
+                textinfo="label+percent+value", textfont_size=10,
+            ))
+            fig_hip.update_layout(
+                paper_bgcolor=WHITE, showlegend=False,
+                title=dict(text="¿Tiene hipoteca?", font=dict(size=13, color=DEEP)),
+                height=280, margin=dict(l=5, r=5, t=44, b=5),
+            )
+            st.plotly_chart(fig_hip, use_container_width=True)
             st.caption(f"{len(df_int_f)} entrevistas")
 
         with col_quote:
@@ -584,5 +638,6 @@ if "grupo" in df_in.columns:
 st.divider()
 st.caption(
     f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
-    "TTL cache: 120s (Sheets, HS) · 300s (BQ). Scores persisten en Aplica + Metadata del Sheet."
+    "TTL cache: 120s (Sheets/HS) · 300s (BQ) · 3600s (HS property labels). "
+    "Scores persisten en Aplica + Metadata del Sheet."
 )
