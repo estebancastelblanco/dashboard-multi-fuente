@@ -16,7 +16,6 @@ def _bootstrap_from_st_secrets() -> None:
         "GOOGLE_APPLICATION_CREDENTIALS_JSON",
         "HUBSPOT_ACCESS_TOKEN",
         "GOOGLE_SHEETS_ID", "GOOGLE_SHEETS_TAB", "GOOGLE_SHEETS_CREDENTIALS",
-        "SCORE_API_URL", "SCORE_API_TOKEN",
     ]
     try:
         for k in keys:

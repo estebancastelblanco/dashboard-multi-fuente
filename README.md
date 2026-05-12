@@ -66,7 +66,7 @@ Multipágina nativo de Streamlit: cualquier `.py` en `pages/` aparece en el side
 | **Google Sheets** · pestaña `Entrevista` | 12 entrevistas cualitativas (P1–P9, tiene hipoteca?). | gspread (mismo client). |
 | **Google Sheets** · pestaña `Infobip` | Teléfonos a los que se envió WhatsApp. Headers vacíos → `fetch_tab` cae a `get_all_values()`. | gspread. |
 | **BigQuery** · `sellers-main-prod.javascript9.{pages,tracks}` | Eventos Segment de la landing `habicapitalliquidez.vercel.app`. Permite contar abrieron link + tracks events. | OAuth user creds (authorized_user). Ver `src/sources/bigquery.py::fetch_fakedoor_landing_events()`. |
-| **Score API (Habi Capital)** · `score-api.habicapital.co/v1/score/<cedula>` | Score ADVANCE 1.1 + Cuota Máxima + Ingresos + Razón. | GET con bearer token. Solo se llama si no hay cache; resultado se persiste al Sheet. Opcional: si `SCORE_API_URL`/`SCORE_API_TOKEN` no están seteados, todos los leads sin valor en `Aplica` aparecen como pendientes. |
+| **Credit application (Habi Capital, prod)** · `api.habicapital.com` | Score + Cuota Máxima + Ingresos + Razón. **El dashboard ya no consulta directamente** — la consulta la dispara el [fakedoor frontend](https://github.com/EstebanCastel/habicapitalliquidez) al firmar T&C, y persiste el resultado en las columnas `Aplica`/`Metadata` del Sheet. El dashboard solo lee. |
 
 ---
 
@@ -115,11 +115,11 @@ HUBSPOT_ACCESS_TOKEN=pat-na1-...
 GOOGLE_SHEETS_ID=1vN7wL8a_NvfLks2IvoIICgbV2GrIDKhPbymS3aLft2I
 GOOGLE_SHEETS_TAB=Leads
 GOOGLE_SHEETS_CREDENTIALS={"type":"service_account","project_id":"try12-455405",...}
-
-# Score API (opcional — sin esto los nuevos leads aparecen como "pendiente")
-SCORE_API_URL=https://score-api.habicapital.co/v1/score
-SCORE_API_TOKEN=<bearer>
 ```
+
+> El dashboard ya no necesita credenciales del credit application API.
+> El scoring lo dispara el fakedoor frontend al firmar T&C, y persiste
+> el resultado en las columnas `Aplica`/`Metadata` del Sheet.
 
 ### Formato TOML (para Streamlit Cloud)
 
@@ -220,26 +220,25 @@ Al `Leads` se le agregaron dos columnas vía `gsheets.ensure_columns()`:
 | `Aplica` | `si` / `no` / `error` — derivado del score (≥720 = sí) |
 | `Metadata` | JSON con la respuesta cruda del API: Aplica, Score, Nivel Riesgo, Ingresos Mensuales, Fuente Ingresos, Deudas Vigentes, Disponible Mensual, Máx. Crédito, Cuota Máxima, Vigencia Aprobación, Notas, Score Mín 720, Razón, Estado |
 
-### Flow por lead
+### Flow
 
 ```
-si Aplica está lleno en el Sheet:
-    leer el JSON de Metadata → usar el cache
-si Aplica está vacío y SCORE_API_URL+SCORE_API_TOKEN están seteados:
-    GET https://score-api.habicapital.co/v1/score/<cedula>
-    parsear respuesta → score, nivel_riesgo, etc.
-    escribir Aplica + Metadata al Sheet (gspread batch_update)
-si no hay API configurada:
-    aplica = "pending" → lead aparece amarillo en el pipeline
+[fakedoor frontend] usuario firma T&C
+  ↓
+[/api/sheets/form] appendea la fila a Leads
+  ↓ after()
+[score-lead.ts] createCreditApp + confirmTyc + pollUntilTerminal (4 min)
+  ↓
+[score-lead.ts] writeback al Sheet (Aplica + Metadata)
+
+[dashboard] solo lee Aplica + Metadata del Sheet
 ```
 
-### Bootstrap histórico ya cargado
+El dashboard ya no consulta el API. Si un lead aparece con `Aplica` vacío, significa que el credit application todavía no respondió (engine en proceso o el frontend no lo disparó). El bootstrap histórico (26 scores de `quienesaplican.xlsx`) + 13 scores re-corridos en prod ya están en el Sheet.
 
-Los 26 scores históricos del `quienesaplican.xlsx` original (6 sí, 16 no, 4 errores) **ya están escritos** en el Sheet. Se hizo una vez desde un script que matched por cédula. Quedan 12 leads nuevos sin consultar — esos amanecen amarillos hasta que se configure el score API.
+### Panel "Estado de los scores"
 
-### Panel "Estado de consulta de scores"
-
-Expander en el dashboard que muestra: API configurado (sí/no), hits de cache, consultados ahora, pendientes, escritos al Sheet, y errores de write si los hay. Útil para verificar que el flujo funciona después de configurar SCORE_API.
+Expander en el dashboard que muestra cuántos leads tienen `Aplica` lleno vs vacío. Útil para verificar si hay leads pendientes de scorear.
 
 ---
 
@@ -293,8 +292,8 @@ Probablemente algún internal name de `FAKEDOOR_PROPS` no matchea el real. Abre 
 **El funnel no tiene la etapa "Entregados WA" exacta**
 Es una estimación al 77% sobre Enviados WA (constante histórica de Infobip). Para hacerla live habría que integrar la API de Infobip y leer delivery_status por mensaje.
 
-**El score API devuelve 401**
-`SCORE_API_TOKEN` no es válido o expiró. Confirma con el equipo de Riesgo de Habi Capital.
+**Un lead tiene `Aplica` vacío**
+El frontend del fakedoor no logró completar el scoring (engine timeout, error de auth, lead nuevo aún sin procesar). Revisa los logs de Vercel del repo `EstebanCastel/habicapitalliquidez`. Como fallback, puedes rellenar Aplica + Metadata manualmente en el Sheet.
 
 ---
 
@@ -304,15 +303,14 @@ No hay cron — cada usuario que abre el dashboard dispara el pull. Caching de S
 - Sheets: TTL 120s
 - HubSpot: TTL 120s
 - BigQuery: TTL 300s
-- Score API: invocado solo para cédulas sin cache en el Sheet (no se cachea en memoria de Streamlit; el Sheet es la verdad).
+- HS property labels: TTL 3600s
 
-Para invalidar el cache, refrescar la página del navegador o esperar el TTL.
+El scoring NO se hace desde el dashboard — lo dispara el fakedoor frontend al firmar T&C. Para invalidar el cache, refrescar la página del navegador o esperar el TTL.
 
 ---
 
 ## Roadmap visible
 
-- [ ] Wire `SCORE_API_URL` + `SCORE_API_TOKEN` en producción (Streamlit Secrets) para que los 12 leads pendientes se autocompleten.
 - [ ] Integración Infobip para que `Entregados WA` sea live, no constante × 0.77.
 - [ ] Generalizar `hubspot.FAKEDOOR_PROPS` a un esquema por experimento.
 - [ ] Test estadístico A/B integrado (z-test de proporciones, igual al original).

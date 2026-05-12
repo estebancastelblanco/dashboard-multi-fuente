@@ -67,15 +67,20 @@ def fetch_top_inmuebles(limit: int = 10) -> pd.DataFrame:
 
 
 def fetch_fakedoor_landing_events() -> pd.DataFrame:
-    """UUIDs que visitaron la landing del fake door, desglosado por tipo de evento.
+    """UUIDs que visitaron la landing, desglosado por URL pattern.
 
-    Cruza `sellers-main-prod.javascript9.pages` y `tracks` filtrando por la URL
-    `https://habicapitalliquidez.vercel.app/%`. Devuelve un DataFrame con:
-      - uuid
-      - total_events
-      - had_pages  (1 si tuvo un page view = abrió el link de WA)
-      - had_tracks (1 si tuvo un track event = hizo algo en la landing)
-      - reached_consent (1 si visitó /consentimiento/<uuid>)
+    Tres etapas posibles dentro del flujo:
+      - /<uuid>                          -> primer landing (home_uuid)
+      - /solicitud?deal_uuid=<uuid>      -> pagina de solicitud
+      - /consentimiento/<uuid>           -> pantalla T&C
+
+    Devuelve un DataFrame con un row por uuid, con flags:
+      - visited_home        page view en /<uuid>
+      - visited_solicitud   page view en /solicitud
+      - visited_consent     page view en /consentimiento/<uuid>
+      - had_pages           cualquier page view (legacy)
+      - had_tracks          cualquier track event (legacy)
+      - total_events        total de eventos
     """
     sql = r"""
     WITH urls AS (
@@ -98,6 +103,10 @@ def fetch_fakedoor_landing_events() -> pd.DataFrame:
       COUNT(*) AS total_events,
       MAX(IF(source = 'pages', 1, 0)) AS had_pages,
       MAX(IF(source = 'tracks', 1, 0)) AS had_tracks,
+      MAX(IF(REGEXP_CONTAINS(context_page_url,
+              r'vercel\.app/[0-9a-fA-F\-]{36}(\?|$)') AND source = 'pages', 1, 0)) AS visited_home,
+      MAX(IF(context_page_url LIKE '%/solicitud%' AND source = 'pages', 1, 0)) AS visited_solicitud,
+      MAX(IF(context_page_url LIKE '%/consentimiento/%' AND source = 'pages', 1, 0)) AS visited_consent,
       MAX(IF(context_page_url LIKE '%/consentimiento/%', 1, 0)) AS reached_consent
     FROM urls
     WHERE uuid IS NOT NULL

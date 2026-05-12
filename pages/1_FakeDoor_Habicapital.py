@@ -18,7 +18,6 @@ def _bootstrap_from_st_secrets() -> None:
         "GOOGLE_APPLICATION_CREDENTIALS_JSON",
         "HUBSPOT_ACCESS_TOKEN",
         "GOOGLE_SHEETS_ID", "GOOGLE_SHEETS_TAB", "GOOGLE_SHEETS_CREDENTIALS",
-        "SCORE_API_URL", "SCORE_API_TOKEN",
     ]
     try:
         for k in keys:
@@ -303,15 +302,15 @@ c5.markdown(kpi_card("Elegibles", n_aplica, "score≥720"), unsafe_allow_html=Tr
 c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allow_html=True)
 
 
-with st.expander("Estado de consulta de scores", expanded=False):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("API configurado", "Sí" if score_stats.get("api_configured") else "No")
-    c2.metric("Cache (Sheet)", score_stats.get("cached", 0))
-    c3.metric("Consultados ahora", score_stats.get("consulted", 0))
-    c4.metric("Pendientes", score_stats.get("pending", 0))
-    c5.metric("Escritos al Sheet", score_stats.get("written", 0))
-    if score_stats.get("write_error"):
-        st.error(f"Write fail: {score_stats['write_error']}")
+with st.expander("Estado de los scores", expanded=False):
+    c1, c2 = st.columns(2)
+    c1.metric("Leads con score (Aplica lleno)", score_stats.get("filled", 0))
+    c2.metric("Leads sin score (Aplica vacío)", score_stats.get("empty", 0))
+    st.caption(
+        "El scoring lo dispara el fakedoor frontend al firmar T&C — escribe "
+        "directamente las columnas `Aplica` y `Metadata` del Sheet. El "
+        "dashboard solo lee, no consulta el API."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,49 +442,82 @@ else:
             )
             st.plotly_chart(fig_f, use_container_width=True)
     with col_v:
-        v_c = df_hs_f["ab_test_landing"].fillna("Sin asignar").value_counts().reset_index()
+        # Solo AH y BH — el experimento solo tiene esas dos variantes
+        v_c = (
+            df_hs_f[df_hs_f["ab_test_landing"].isin(["AH", "BH"])]["ab_test_landing"]
+            .value_counts().reset_index()
+        )
         v_c.columns = ["Variante", "N"]
         if not v_c.empty:
             fig_v = go.Figure(go.Pie(
                 labels=v_c["Variante"], values=v_c["N"],
-                hole=0.42, marker_colors=[PRIMARY, ACCENT, PALE, LIGHT],
+                hole=0.42, marker_colors=[PRIMARY, ACCENT],
                 textinfo="label+percent+value", textfont_size=10,
             ))
             fig_v.update_layout(
                 paper_bgcolor=WHITE, showlegend=False,
-                title=dict(text="Variante A/B", font=dict(size=13, color=DEEP)),
+                title=dict(text="Variante A/B (solo AH/BH)", font=dict(size=13, color=DEEP)),
                 height=260, margin=dict(l=5, r=5, t=44, b=5),
             )
             st.plotly_chart(fig_v, use_container_width=True)
+        else:
+            st.info("No hay deals con ab_test_landing ∈ {AH, BH} en el filtro actual.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Usabilidad de la landing (BigQuery)
+# Funnel de usabilidad de la landing (4 etapas BQ)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Usabilidad de la landing (BigQuery)</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
 
 if df_bq.empty:
     st.info("BigQuery no devolvió eventos de la landing.")
 else:
-    # Filtra a UUIDs del universo HS si hay filtros aplicados
     df_bq_in = df_bq.copy()
     if allowed_uuids:
         df_bq_in = df_bq_in[df_bq_in["uuid"].astype(str).isin(allowed_uuids)]
 
-    n_visited = len(df_bq_in)
-    n_with_tracks = int(df_bq_in.get("had_tracks", pd.Series(dtype=int)).fillna(0).astype(int).sum())
-    n_consent = int(df_bq_in.get("reached_consent", pd.Series(dtype=int)).fillna(0).astype(int).sum())
-    total_events = int(df_bq_in.get("total_events", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+    # Etapa 1: Enviados WA — replicamos del funnel principal
+    n_u1 = n_e3  # Enviados WA (77% × con conjunto), del funnel principal
+    # Etapa 2: Abrió primer link (/<uuid>)
+    n_u2 = int(df_bq_in.get("visited_home", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+    # Etapa 3: Llegó a /solicitud
+    n_u3 = int(df_bq_in.get("visited_solicitud", pd.Series(dtype=int)).fillna(0).astype(int).sum())
+    # Etapa 4: T&C firmados (= leads en Sheet, mismo del funnel principal)
+    n_u4 = n_leads
 
-    u1, u2, u3, u4 = st.columns(4)
-    u1.markdown(kpi_card("UUIDs visitaron", f"{n_visited:,}", "BQ pages + tracks"), unsafe_allow_html=True)
-    u2.markdown(kpi_card("Con tracks events", f"{n_with_tracks:,}", "= interactuaron"), unsafe_allow_html=True)
-    u3.markdown(kpi_card("Llegaron a consentimiento", f"{n_consent:,}", "URL /consentimiento/"), unsafe_allow_html=True)
-    u4.markdown(kpi_card("Total eventos", f"{total_events:,}", "pages + tracks"), unsafe_allow_html=True)
+    usab_stages = [
+        ("Enviados WA",       n_u1, "Estimado (funnel principal)"),
+        ("Abrió primer link", n_u2, "BQ · page view en /<uuid>"),
+        ("Llegó a /solicitud", n_u3, "BQ · page view en /solicitud"),
+        ("Firmó T&C",         n_u4, "Sheets/Leads"),
+    ]
+    u_labels = [s[0] for s in usab_stages]
+    u_vals = [s[1] for s in usab_stages]
+    u_sources = [s[2] for s in usab_stages]
+    u_colors = [DEEP, PRIMARY, MED, GREEN_DARK]
+    u_text = [
+        f"{v:,}  ({v/u_vals[i-1]*100:.0f}%)" if i > 0 and u_vals[i-1] > 0 else f"{v:,}"
+        for i, v in enumerate(u_vals)
+    ]
+    use_log_u = (max(u_vals) if u_vals else 0) > 100 and all(v > 0 for v in u_vals)
 
-    with st.expander("Top 15 UUIDs por eventos", expanded=False):
-        top = df_bq_in.sort_values("total_events", ascending=False).head(15)
-        st.dataframe(top, hide_index=True, use_container_width=True)
+    fig_u = go.Figure(go.Bar(
+        x=u_vals, y=u_labels, orientation="h",
+        marker_color=u_colors, text=u_text,
+        textposition="outside", textfont=dict(size=11, color=DEEP),
+        customdata=u_sources,
+        hovertemplate="<b>%{y}</b><br>%{x:,} · %{customdata}<extra></extra>",
+    ))
+    fig_u.update_layout(
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        height=260, margin=dict(l=10, r=200, t=10, b=10),
+        xaxis=dict(type="log" if use_log_u else "linear",
+                   title="Clientes" + (" (log)" if use_log_u else ""),
+                   gridcolor="#ede8f5", tickformat=",d"),
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig_u, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -600,15 +632,14 @@ st.markdown("<h2>Insights · entrevistas cualitativas</h2>", unsafe_allow_html=T
 if df_int.empty:
     st.info("La pestaña Entrevista está vacía.")
 else:
-    if allowed_uuids:
-        leads_phones = set(df_in["phone_norm"].dropna().astype(str))
-        df_int_f = df_int[df_int["phone_norm"].isin(leads_phones)].copy()
-    else:
-        df_int_f = df_int.copy()
+    # Solo entrevistas de leads que APLICAN (aplica=si)
+    aplica_si_phones = set(df_in[df_in["aplica"] == "si"]["phone_norm"].dropna().astype(str))
+    df_int_f = df_int[df_int["phone_norm"].isin(aplica_si_phones)].copy()
 
     if df_int_f.empty:
-        st.info("Ninguna entrevista corresponde a los leads filtrados.")
+        st.info("Ninguna entrevista corresponde a leads que aplican (aplica=si).")
     else:
+        st.caption(f"Insights solo sobre los {len(df_int_f)} leads que aplican (de {len(df_int)} entrevistas totales)")
         col_pie, col_quote = st.columns([1, 2])
         with col_pie:
             hip_vals = df_int_f["tiene hipoteca?"].fillna("(sin dato)").astype(str).str.strip().str.lower()
@@ -643,24 +674,6 @@ else:
             _bullets("P5", "P5 · Plazo preferido")
             _bullets("P8", "P8 · Objeciones / fricción")
             _bullets("P9", "P9 · Urgencia")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# A/B summary
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>A/B · AH (84m) vs BH (120m)</h2>", unsafe_allow_html=True)
-if "grupo" in df_in.columns:
-    ab = (
-        df_in.groupby("grupo")
-        .agg(
-            firmaron=("cedula", "count"),
-            contactados=("contactado", "sum"),
-            interes=("contesto?", lambda s: (s.astype(str).str.lower() == "si").sum()),
-            aplican=("status", lambda s: s.isin(["aplica_contactado", "aplica_pendiente_llamar"]).sum()),
-        )
-        .reset_index()
-    )
-    st.dataframe(ab, hide_index=True, use_container_width=True)
 
 
 st.divider()
