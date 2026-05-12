@@ -40,7 +40,28 @@ def fetch_tab(tab: str, sheet_id: str | None = None) -> pd.DataFrame:
         ws = sh.worksheet(tab)
     except gspread.WorksheetNotFound:
         return pd.DataFrame()
-    return pd.DataFrame(ws.get_all_records())
+    try:
+        return pd.DataFrame(ws.get_all_records())
+    except gspread.exceptions.GSpreadException:
+        # Headers vacios/duplicados → fallback robusto a get_all_values
+        values = ws.get_all_values()
+        if not values:
+            return pd.DataFrame()
+        raw_headers = values[0]
+        seen: dict[str, int] = {}
+        headers: list[str] = []
+        for i, h in enumerate(raw_headers):
+            h = h.strip() or f"col_{i}"
+            if h in seen:
+                seen[h] += 1
+                headers.append(f"{h}_{seen[h]}")
+            else:
+                seen[h] = 0
+                headers.append(h)
+        rows = values[1:] if len(values) > 1 else []
+        # Padding por si las filas tienen menos columnas que el header
+        rows = [row + [""] * (len(headers) - len(row)) for row in rows]
+        return pd.DataFrame(rows, columns=headers)
 
 
 def list_tabs(sheet_id: str | None = None) -> list[str]:

@@ -89,6 +89,10 @@ def _parse_cached(aplica_cell: str, meta_cell: str) -> ScoreResult:
         "cedula": meta.get("cedula", ""),
         "score": score,
         "nivel_riesgo": meta.get("nivel_riesgo") or meta.get("Nivel Riesgo"),
+        "cuota_maxima": meta.get("Cuota Máxima") or meta.get("cuota_maxima"),
+        "ingresos_mensuales": meta.get("Ingresos Mensuales") or meta.get("ingresos_mensuales"),
+        "max_credito": meta.get("Máx. Crédito") or meta.get("max_credito"),
+        "razon": meta.get("Razón") or meta.get("razon"),
         "aplica": aplica,
         "raw": meta,
     }
@@ -168,6 +172,10 @@ def enrich_leads_with_scores(
 
     df["score"] = [r.get("score") for r in results]
     df["nivel_riesgo"] = [r.get("nivel_riesgo") for r in results]
+    df["cuota_maxima"] = [r.get("cuota_maxima") for r in results]
+    df["ingresos_mensuales"] = [r.get("ingresos_mensuales") for r in results]
+    df["max_credito"] = [r.get("max_credito") for r in results]
+    df["razon"] = [r.get("razon") for r in results]
     df["aplica"] = [r.get("aplica", "pending") for r in results]
 
     stats = {

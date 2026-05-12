@@ -23,7 +23,34 @@ FAKEDOOR_PROPS: dict[str, str] = {
     "nombre_del_conjunto":          "nombre del conjunto",
     "abc_test_landing_co":          "ABC test landing Co",
     "ab_test_landing":              "ab_test_landing",
+    "comite_remodelaciones":        "Comité Remodelaciones",
+    "razon_rechazo_comite":         "Razón rechazo comité",
 }
+
+
+# Valores de comite_remodelaciones que indican "Rechazos Remo" (del dashboard original)
+REMO_VALUES = {
+    "No se validó parqueadero y/o depósito",
+    "Rechazado Visita vencida",
+    "Se Realizó A. Virtual se Requiere A. Presencial.",
+    "Solucionar cliente - Inmueble con humedad",
+}
+
+FUENTES = ["Top", "MM + Inmo", "Rechazos Comite", "Rechazos Remo"]
+
+
+def compute_fuente(row) -> str:
+    """Clasifica un deal en una de 4 fuentes (replica logica de resultadosfakedoor/dashboard.py)."""
+    flag = str(row.get("flag_fakedoor", "")).strip()
+    if flag == "Top":
+        return "Top"
+    remo = str(row.get("comite_remodelaciones", "")).strip()
+    if remo and remo not in ("nan",) and remo in REMO_VALUES:
+        return "Rechazos Remo"
+    op = str(row.get("oportunidad_del_negocio_co", "")).strip()
+    if op == "Descartado por comité":
+        return "Rechazos Comite"
+    return "MM + Inmo"
 
 
 def _token() -> str:
