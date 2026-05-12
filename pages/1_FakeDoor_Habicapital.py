@@ -814,7 +814,7 @@ if traccion >= TRACCION_GO:
     decision_text = "Demanda real confirmada · construir el producto"
 elif traccion >= TRACCION_KILL:
     decision = "ITERATE"
-    decision_color = YELLOW
+    decision_color = "#B45309"  # amber-700 · contraste con texto blanco
     decision_text = "Señal ambigua · iterar copy o extender el experimento"
 else:
     decision = "KILL"
