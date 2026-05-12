@@ -204,6 +204,14 @@ with st.sidebar:
 
     HIPO_STATUS_OPTS = ["Sí", "No", "Sin dato"]
     HIPO_FUENTE_OPTS = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
+    CONTACTADO_OPTS = ["Sí", "No"]
+
+    st.markdown("### Contactado")
+    sel_contactado = st.multiselect(
+        "contactado", CONTACTADO_OPTS, default=CONTACTADO_OPTS,
+        label_visibility="collapsed",
+        help="Sí = el teléfono aparece en la pestaña Entrevista",
+    )
 
     st.markdown("### Hipoteca")
     sel_hipoteca = st.multiselect(
@@ -325,7 +333,14 @@ hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
 df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
 
-# Filtros de hipoteca — solo narrow cuando el usuario deselecciona algo.
+# Filtros post-cómputo (contactado + hipoteca) — solo narrow si user deselecciona.
+if _applied(sel_contactado, CONTACTADO_OPTS):
+    want_contactado = "Sí" in sel_contactado
+    want_no = "No" in sel_contactado
+    if want_contactado and not want_no:
+        df_in = df_in[df_in["contactado"]]
+    elif want_no and not want_contactado:
+        df_in = df_in[~df_in["contactado"]]
 if _applied(sel_hipoteca, HIPO_STATUS_OPTS):
     df_in = df_in[df_in["hipoteca_status"].isin(sel_hipoteca)]
 if _applied(sel_hipo_fuente, HIPO_FUENTE_OPTS):
