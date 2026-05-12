@@ -1,0 +1,9 @@
+streamlit>=1.32
+pandas>=2.0
+python-dotenv>=1.0
+google-cloud-bigquery>=3.20
+google-auth>=2.28
+gspread>=6.0
+requests>=2.31
+db-dtypes>=1.2
+pyarrow>=15.0
