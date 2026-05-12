@@ -204,11 +204,16 @@ with st.sidebar:
     st.markdown("---")
 
 
-# Aplicar filtros — siempre limita a AH/BH para excluir A/B/null residuales
+# Aplicar filtros — el universo entero queda intacto. Solo se narrow cuando
+# el usuario explícitamente deselecciona variantes (default = AH y BH ambos).
 df_hs_f = df_hs.copy()
 if not df_hs_f.empty:
-    # Restricción de variante: solo AH/BH del experimento
-    df_hs_f = df_hs_f[df_hs_f["ab_test_landing"].isin(sel_variantes)]
+    # Si el usuario deselecciona AH o BH, filtra; default mantiene todo.
+    if set(sel_variantes) != {"AH", "BH"}:
+        if sel_variantes:
+            df_hs_f = df_hs_f[df_hs_f["ab_test_landing"].isin(sel_variantes)]
+        else:
+            df_hs_f = df_hs_f.iloc[0:0]  # ningun lead
     if len(sel_fuentes) < len(hs_src.FUENTES):
         df_hs_f = df_hs_f[df_hs_f["fuente"].isin(sel_fuentes)]
     if len(sel_oport) < len(oport_all):
@@ -604,31 +609,92 @@ st.caption(" · ".join(caption_parts))
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabla raw de HubSpot deals (filtrados)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown(f"<h2>HubSpot · deals filtrados ({len(df_hs_f):,})</h2>", unsafe_allow_html=True)
+st.markdown(
+    f"<h2>HubSpot · deals filtrados ({len(df_hs_f):,}) — consolidado HS+Sheets+BQ+Entrevista</h2>",
+    unsafe_allow_html=True,
+)
 if df_hs_f.empty:
     st.info("Sin deals con los filtros aplicados.")
 else:
+    # Consolidación: base = df_hs_f (HubSpot). Joineamos Leads, Entrevista, BQ.
+    consolidated = df_hs_f.copy()
+    consolidated["uuid_str"] = consolidated["deal_uuid"].astype(str)
+    consolidated["phone_norm_hs"] = consolidated.get("phone", pd.Series(dtype=str)).apply(_norm_phone)
+
+    # Sheets/Leads → cedula, grupo, contesto?, Aplica, score, nivel, cuota, ingresos, razon
+    leads_cols = [c for c in [
+        "uuid", "cedula", "grupo", "contesto?",
+        "aplica", "score", "nivel_riesgo",
+        "cuota_maxima", "ingresos_mensuales", "razon",
+    ] if c in df_in.columns or c == "uuid"]
+    leads_for_join = df_in[leads_cols].copy() if not df_in.empty else pd.DataFrame()
+    if not leads_for_join.empty:
+        leads_for_join["uuid_str"] = leads_for_join["uuid"].astype(str)
+        leads_for_join = leads_for_join.drop(columns=["uuid"])
+        consolidated = consolidated.merge(leads_for_join, on="uuid_str", how="left")
+
+    # Entrevista → tiene hipoteca? (por teléfono)
+    if not df_int.empty:
+        int_join = df_int[["phone_norm", "tiene hipoteca?"]].drop_duplicates("phone_norm")
+        int_join = int_join.rename(columns={"phone_norm": "phone_norm_hs"})
+        consolidated = consolidated.merge(int_join, on="phone_norm_hs", how="left")
+    else:
+        consolidated["tiene hipoteca?"] = None
+
+    # BigQuery → visitas a landing
+    if not df_bq.empty:
+        bq_join = df_bq[["uuid", "total_events", "visited_home", "visited_solicitud",
+                          "visited_consent"]].copy()
+        bq_join["uuid_str"] = bq_join["uuid"].astype(str)
+        bq_join = bq_join.drop(columns=["uuid"])
+        consolidated = consolidated.merge(bq_join, on="uuid_str", how="left")
+    for c in ("total_events", "visited_home", "visited_solicitud", "visited_consent"):
+        if c not in consolidated.columns:
+            consolidated[c] = 0
+    consolidated[["total_events", "visited_home", "visited_solicitud", "visited_consent"]] = (
+        consolidated[["total_events", "visited_home", "visited_solicitud", "visited_consent"]]
+        .fillna(0).astype(int)
+    )
+
+    # Flags derivados
+    consolidated["firmó T&C"] = consolidated.get("cedula", pd.Series(dtype=str)).fillna("").astype(str).ne("")
+
+    # Tabla final — orden y rename
     show_cols = [
-        "dealname", "phone", "createdate", "estado_label",
-        "fuente", "flag_fakedoor", "ab_test_landing",
-        "oportunidad_del_negocio_label", "nombre_del_conjunto",
-        "comite_remodelaciones", "deal_uuid",
+        ("dealname",                    "Nombre del negocio"),
+        ("phone",                       "Teléfono"),
+        ("cedula",                      "Cédula"),
+        ("createdate",                  "Fecha creación"),
+        ("estado_label",                "Estado del Negocio"),
+        ("oportunidad_del_negocio_label", "Oportunidad del Negocio"),
+        ("fuente",                      "Fuente"),
+        ("flag_fakedoor",               "Flag fakedoor"),
+        ("ab_test_landing",             "Variante"),
+        ("grupo",                       "Grupo form"),
+        ("nombre_del_conjunto",         "Conjunto"),
+        ("comite_remodelaciones",       "Comité Remo"),
+        ("visited_home",                "BQ home"),
+        ("visited_solicitud",           "BQ /solicitud"),
+        ("visited_consent",             "BQ /consent"),
+        ("total_events",                "BQ eventos"),
+        ("firmó T&C",                   "Firmó T&C"),
+        ("contesto?",                   "Contestó?"),
+        ("tiene hipoteca?",             "Hipoteca?"),
+        ("aplica",                      "Aplica"),
+        ("score",                       "Score"),
+        ("nivel_riesgo",                "Nivel"),
+        ("cuota_maxima",                "Cuota Máxima"),
+        ("ingresos_mensuales",          "Ingresos"),
+        ("razon",                       "Razón"),
+        ("deal_uuid",                   "deal_uuid"),
     ]
-    show_cols = [c for c in show_cols if c in df_hs_f.columns]
-    df_hs_display = df_hs_f[show_cols].rename(columns={
-        "dealname": "Nombre del negocio",
-        "phone": "Teléfono",
-        "createdate": "Fecha de creación",
-        "estado_label": "Estado del Negocio",
-        "fuente": "Fuente",
-        "flag_fakedoor": "flag fakedoor",
-        "ab_test_landing": "Variante",
-        "oportunidad_del_negocio_label": "Oportunidad del Negocio",
-        "nombre_del_conjunto": "Nombre del conjunto",
-        "comite_remodelaciones": "Comité remodelaciones",
-        "deal_uuid": "deal_uuid",
-    })
-    st.dataframe(df_hs_display, hide_index=True, use_container_width=True)
+    present = [(src, lab) for src, lab in show_cols if src in consolidated.columns]
+    df_display = consolidated[[s for s, _ in present]].rename(columns=dict(present))
+    st.dataframe(df_display, hide_index=True, use_container_width=True)
+    st.caption(
+        "Cruces: HubSpot deal_uuid ↔ Sheets uuid · HubSpot phone (norm) ↔ "
+        "Entrevista telefono · HubSpot deal_uuid ↔ BigQuery uuid."
+    )
 
     with st.expander("Debug · propiedades vacías"):
         null_pct = (df_hs.isna().mean() * 100).round(1).sort_values(ascending=False)
