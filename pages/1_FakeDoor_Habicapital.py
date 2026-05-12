@@ -775,7 +775,7 @@ else:
         f"{n_sd} sin contactar. La entrevista gana sobre la propiedad de HubSpot."
     )
 
-    # Matriz 3×3: filas = status hipoteca, columnas = fuente del dato
+    # Matriz tipo confusion matrix: filas = status hipoteca, cols = fuente
     status_order = ["Sí", "No", "Sin dato"]
     fuente_order = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
     matrix = (
@@ -785,49 +785,41 @@ else:
         .astype(int)
     )
     z = matrix.values
+    z_max = max(int(z.max()), 1)
+    # Texto blanco si la celda está oscura (>= 50% del máximo)
+    text_colors = [
+        ["#fff" if z[i][j] >= z_max * 0.5 else DEEP for j in range(len(fuente_order))]
+        for i in range(len(status_order))
+    ]
 
-    # Colores: cada celda según el status. Sí=rojo (no aplica),
-    # No=verde (aplica), Sin dato=gris.
-    row_colors = {"Sí": "#EF5350", "No": "#1B5E20", "Sin dato": "#9E9E9E"}
-    color_grid = []
-    for status in status_order:
-        base = row_colors[status]
-        color_grid.append([
-            base if z[status_order.index(status)][j] > 0 else "#F4F1F9"
-            for j in range(len(fuente_order))
-        ])
-
-    fig_h = go.Figure()
+    fig_h = go.Figure(go.Heatmap(
+        z=z,
+        x=fuente_order,
+        y=status_order,
+        colorscale=[[0, "#F4F1F9"], [0.001, PALE], [1, PRIMARY]],
+        showscale=False,
+        xgap=2, ygap=2,
+        hovertemplate="<b>%{y}</b> · %{x} · %{z} elegibles<extra></extra>",
+    ))
+    # Anotaciones con el conteo de cada celda
     for i, status in enumerate(status_order):
         for j, fuente in enumerate(fuente_order):
-            val = int(z[i][j])
-            color = color_grid[i][j]
-            txt_color = "#fff" if val > 0 else "#bbb"
-            fig_h.add_trace(go.Scatter(
-                x=[fuente], y=[status],
-                mode="markers+text",
-                marker=dict(size=130, color=color, line=dict(color=DEEP, width=1),
-                            symbol="square"),
-                text=[f"<b>{val}</b>"], textfont=dict(size=22, color=txt_color),
-                textposition="middle center",
-                hovertemplate=f"<b>{status}</b> · {fuente} · {val} elegibles<extra></extra>",
-                showlegend=False,
-            ))
+            fig_h.add_annotation(
+                x=fuente, y=status, text=f"<b>{int(z[i][j])}</b>",
+                showarrow=False,
+                font=dict(size=22, color=text_colors[i][j], family="Inter, sans-serif"),
+            )
     fig_h.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=12),
-        height=360, margin=dict(l=10, r=10, t=20, b=40),
+        height=320, margin=dict(l=10, r=10, t=20, b=40),
         xaxis=dict(
             title=dict(text="Fuente del dato", font=dict(size=12, color=MED)),
-            categoryorder="array", categoryarray=fuente_order,
-            showgrid=False, zeroline=False,
-            range=[-0.5, len(fuente_order) - 0.5],
+            side="bottom", showgrid=False, zeroline=False, ticks="",
         ),
         yaxis=dict(
             title=dict(text="¿Tiene hipoteca?", font=dict(size=12, color=MED)),
-            categoryorder="array", categoryarray=status_order,
-            autorange="reversed", showgrid=False, zeroline=False,
-            range=[-0.5, len(status_order) - 0.5],
+            autorange="reversed", showgrid=False, zeroline=False, ticks="",
         ),
     )
     st.plotly_chart(fig_h, use_container_width=True)
