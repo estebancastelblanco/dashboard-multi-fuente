@@ -35,10 +35,8 @@ REGISTRY: list[Experiment] = [
         ),
         attachments=["experiments/fakedoor_habicapital/funnel.md"],
         funnel_baseline={
-            "Leads elegibles":   2670,
-            "Enviados WA":       1234,
-            "Entregados WA":     1125,
-            "Abrieron link":     377,
+            # Constante de delivery WA (no hay API live de Infobip — promedio historico)
+            "wa_delivery_ratio": 0.77,
         },
     ),
     Experiment(

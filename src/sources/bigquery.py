@@ -67,24 +67,28 @@ def fetch_top_inmuebles(limit: int = 10) -> pd.DataFrame:
 
 
 def fetch_fakedoor_landing_events() -> pd.DataFrame:
-    """UUIDs que visitaron la landing del fake door y si llegaron a consentimiento.
+    """UUIDs que visitaron la landing del fake door, desglosado por tipo de evento.
 
     Cruza `sellers-main-prod.javascript9.pages` y `tracks` filtrando por la URL
     `https://habicapitalliquidez.vercel.app/%`. Devuelve un DataFrame con:
       - uuid
       - total_events
-      - reached_consent (bool, 1 si visito /consentimiento/<uuid>)
+      - had_pages  (1 si tuvo un page view = abrió el link de WA)
+      - had_tracks (1 si tuvo un track event = hizo algo en la landing)
+      - reached_consent (1 si visitó /consentimiento/<uuid>)
     """
     sql = r"""
     WITH urls AS (
       SELECT context_page_url,
-             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid
+             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
+             'pages' AS source
       FROM `sellers-main-prod.javascript9.pages`
       WHERE context_page_url IS NOT NULL
         AND context_page_url LIKE 'https://habicapitalliquidez.vercel.app/%'
       UNION ALL
       SELECT context_page_url,
-             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid
+             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
+             'tracks' AS source
       FROM `sellers-main-prod.javascript9.tracks`
       WHERE context_page_url IS NOT NULL
         AND context_page_url LIKE 'https://habicapitalliquidez.vercel.app/%'
@@ -92,7 +96,8 @@ def fetch_fakedoor_landing_events() -> pd.DataFrame:
     SELECT
       uuid,
       COUNT(*) AS total_events,
-      COUNTIF(context_page_url LIKE '%/consentimiento/%') AS consent_events,
+      MAX(IF(source = 'pages', 1, 0)) AS had_pages,
+      MAX(IF(source = 'tracks', 1, 0)) AS had_tracks,
       MAX(IF(context_page_url LIKE '%/consentimiento/%', 1, 0)) AS reached_consent
     FROM urls
     WHERE uuid IS NOT NULL

@@ -293,38 +293,54 @@ with st.expander("Estado de consulta de scores", expanded=False):
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel LIVE
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Embudo del experimento (en vivo)</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Embudo del experimento</h2>", unsafe_allow_html=True)
 
-landing_uuids = set(df_bq["uuid"].dropna().astype(str)) if not df_bq.empty else set()
+# BQ desglosado
+pages_uuids = set(df_bq[df_bq["had_pages"] == 1]["uuid"].dropna().astype(str)) if not df_bq.empty and "had_pages" in df_bq.columns else set()
+tracks_uuids = set(df_bq[df_bq["had_tracks"] == 1]["uuid"].dropna().astype(str)) if not df_bq.empty and "had_tracks" in df_bq.columns else set()
+# Fallback si la query antigua aun cachea sin las columnas nuevas
+if not pages_uuids and not df_bq.empty and "uuid" in df_bq.columns:
+    pages_uuids = set(df_bq["uuid"].dropna().astype(str))
 
-n_n0 = n_universe
-n_n1 = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum()) if not df_hs_f.empty and "nombre_del_conjunto" in df_hs_f.columns else 0
-if not df_hs_f.empty and "phone_norm" in df_hs_f.columns and infobip_phones:
-    n_n2 = int(df_hs_f["phone_norm"].isin(infobip_phones).sum())
+# Etapa 1: Leads elegibles = universo HS filtrado
+n_e1 = n_universe
+# Etapa 2: Enviados WA = los que tienen nombre del conjunto en HubSpot
+if not df_hs_f.empty and "nombre_del_conjunto" in df_hs_f.columns:
+    n_e2 = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum())
 else:
-    n_n2 = 0
-if allowed_uuids and landing_uuids:
-    n_n3 = len(allowed_uuids & landing_uuids)
-elif landing_uuids and not allowed_uuids:
-    n_n3 = len(landing_uuids)
+    n_e2 = 0
+# Etapa 3: Entregados WA = 77% historico de Enviados (no hay API Infobip live)
+delivery_ratio = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.77)
+n_e3 = int(round(n_e2 * delivery_ratio))
+# Etapa 4: Abrieron WA = uuids con page-view en BQ ∩ HS allowed
+if allowed_uuids and pages_uuids:
+    n_e4 = len(allowed_uuids & pages_uuids)
 else:
-    n_n3 = 0
-n_n4 = n_leads
-n_n5 = n_contactados
-n_n6 = n_interes
-n_n7 = n_aplica
-n_n8 = n_aplica - int(df_in["con_hipoteca"].sum())
+    n_e4 = len(pages_uuids) if not allowed_uuids else 0
+# Etapa 5: Clicks landing = uuids con track-event en BQ ∩ HS allowed
+if allowed_uuids and tracks_uuids:
+    n_e5 = len(allowed_uuids & tracks_uuids)
+else:
+    n_e5 = len(tracks_uuids) if not allowed_uuids else 0
+# Etapa 6: T&C firmados
+n_e6 = n_leads
+# Etapa 7: Interes activo
+n_e7 = n_interes
+# Etapa 8: Aprobados riesgo
+n_e8 = n_aplica
+# Etapa 9: Elegibles (sin hipoteca)
+n_e9 = n_aplica - int(df_in["con_hipoteca"].sum())
 
 stages = [
-    ("Leads elegibles (HS fakedoor)",     n_n0, "HubSpot"),
-    ("Con nombre del conjunto",           n_n1, "HubSpot"),
-    ("Enviados WA (Infobip)",             n_n2, "Sheets/Infobip"),
-    ("Abrieron link (landing)",           n_n3, "BigQuery"),
-    ("T&C firmados",                       n_n4, "Sheets/Leads"),
-    ("Contactados",                        n_n5, "Sheets/Leads"),
-    ("Interés activo",                     n_n6, "Sheets/Leads"),
-    ("Aprobados riesgo (Aplica=sí)",       n_n7, "Sheet+API"),
-    ("Elegibles (sin hipoteca)",           n_n8, "Sheet+Entrevista"),
+    ("Leads elegibles",      n_e1, "HubSpot · flag_fakedoor + ≥20 abr"),
+    ("Enviados WA",          n_e2, "HubSpot · con nombre del conjunto"),
+    (f"Entregados WA",       n_e3, f"Estimado · {int(delivery_ratio*100)}% × Enviados"),
+    ("Abrieron WA",          n_e4, "BigQuery · pages ∩ HS"),
+    ("Clicks landing",       n_e5, "BigQuery · tracks ∩ HS"),
+    ("T&C firmados",         n_e6, "Sheets/Leads ∩ HS"),
+    ("Interés activo",       n_e7, "Sheets/Leads · contesto?=si"),
+    ("Aprobados riesgo",     n_e8, "Sheet+API · Aplica=si"),
+    ("Elegibles",            n_e9, "Aprobados sin hipoteca"),
 ]
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
