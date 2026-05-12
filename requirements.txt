@@ -7,3 +7,4 @@ gspread>=6.0
 requests>=2.31
 db-dtypes>=1.2
 pyarrow>=15.0
+plotly>=5.20

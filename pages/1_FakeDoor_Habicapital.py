@@ -1,4 +1,4 @@
-"""FakeDoor Habicapital — dashboard live."""
+"""FakeDoor Habicapital — dashboard live con persistencia de scores."""
 from __future__ import annotations
 
 import os
@@ -30,6 +30,7 @@ def _bootstrap_from_st_secrets() -> None:
 
 _bootstrap_from_st_secrets()
 
+from src.experiments import REGISTRY
 from src.sources import gsheets as gs_src
 from src.sources import hubspot as hs_src
 from src.sources import risk_score as score_src
@@ -42,29 +43,26 @@ from src.styling import (
 st.set_page_config(page_title="FakeDoor Habicapital", layout="wide")
 inject_base_css()
 
+EXPERIMENT = next(e for e in REGISTRY if e.slug == "fakedoor-habicapital")
+
 st.markdown(
     f"<h1 style='color:{DEEP};font-size:1.5rem;font-weight:700;margin-bottom:0'>"
     f"Fake Door · Crédito de Libre Inversión con Garantía Hipotecaria</h1>"
     f"<div style='color:{MED};font-size:0.8rem;margin-bottom:20px'>"
-    f"Habi Capital · lanzado 20 abr 2026 · A/B: AH=84m vs BH=120m · 20% EA</div>",
+    f"Habi Capital · lanzado {EXPERIMENT.start_date} · A/B: AH=84m vs BH=120m · 20% EA</div>",
     unsafe_allow_html=True,
 )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Loaders cacheados
+# Loaders
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner="Cargando Leads (Google Sheets)…")
-def load_leads() -> pd.DataFrame:
-    df = gs_src.fetch_tab("Leads")
-    if df.empty:
-        return df
-    for col in ("cedula", "telefono", "contesto?"):
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-    return df
+@st.cache_data(ttl=120, show_spinner="Cargando Leads…")
+def load_leads_raw() -> pd.DataFrame:
+    return gs_src.fetch_tab("Leads")
 
 
-@st.cache_data(ttl=120, show_spinner="Cargando Entrevistas (Google Sheets)…")
+@st.cache_data(ttl=120, show_spinner="Cargando Entrevistas…")
 def load_entrevistas() -> pd.DataFrame:
     df = gs_src.fetch_tab("Entrevista")
     if not df.empty and "telefono" in df.columns:
@@ -72,16 +70,32 @@ def load_entrevistas() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=120, show_spinner="Contando envios WA (Infobip)…")
+def load_infobip_count() -> int:
+    """Cuenta teléfonos no vacíos en la pestaña Infobip."""
+    try:
+        # Lee la columna 5 directamente (donde estaban los teléfonos según la inspección)
+        df = gs_src.fetch_tab("Infobip")
+        # Si get_all_records dejó columnas '', cuenta valores no-vacíos en todas las cols
+        if df.empty:
+            return 0
+        all_vals = pd.concat([df[c].astype(str) for c in df.columns], ignore_index=True)
+        return int(all_vals.str.strip().ne("").sum())
+    except Exception:
+        return 0
+
+
 @st.cache_data(ttl=300, show_spinner="Consultando HubSpot…")
 def load_hs_deals() -> pd.DataFrame:
-    return hs_src.fetch_fakedoor_deals(since_iso="2026-04-20")
+    return hs_src.fetch_fakedoor_deals(since_iso=EXPERIMENT.start_date)
 
 
-@st.cache_data(ttl=600, show_spinner="Consultando scores…")
-def load_scores(cedulas: tuple[str, ...]) -> pd.DataFrame:
-    if not cedulas:
-        return pd.DataFrame(columns=["cedula", "score", "nivel_riesgo", "aplica"])
-    return score_src.consultar_batch(list(cedulas))
+@st.cache_data(ttl=120, show_spinner="Consultando scores (con persistencia)…")
+def load_leads_with_scores() -> tuple[pd.DataFrame, dict]:
+    df_raw = load_leads_raw()
+    if df_raw.empty:
+        return df_raw, {}
+    return score_src.enrich_leads_with_scores(df_raw, tab="Leads", cedula_col="cedula")
 
 
 def _norm_phone(s: object) -> str:
@@ -92,47 +106,31 @@ def _norm_phone(s: object) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Carga base
+# Carga
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    df_leads = load_leads()
+    df, score_stats = load_leads_with_scores()
 except Exception as exc:
-    st.error(f"Error cargando Leads: {exc}")
+    st.error(f"Error cargando Leads + scores: {type(exc).__name__}: {exc}")
     st.stop()
 
-if df_leads.empty:
+if df.empty:
     st.warning("La pestaña Leads está vacía.")
     st.stop()
 
 try:
     df_int = load_entrevistas()
-except Exception as exc:
+except Exception:
     df_int = pd.DataFrame()
-    st.warning(f"No pude cargar Entrevistas: {exc}")
 
-df_leads["phone_norm"] = df_leads["telefono"].apply(_norm_phone)
+# Cruces
+df["phone_norm"] = df["telefono"].apply(_norm_phone)
 if not df_int.empty:
     df_int["phone_norm"] = df_int["telefono"].apply(_norm_phone)
-
-
-# Score por cédula
-cedulas = tuple(df_leads["cedula"].dropna().astype(str).unique()) if "cedula" in df_leads.columns else ()
-df_scores = load_scores(cedulas)
-
-# Cruzar leads + entrevistas + scores
-df = df_leads.merge(
-    df_scores[["cedula", "score", "nivel_riesgo", "aplica"]],
-    on="cedula", how="left",
-)
-if not df_int.empty:
-    df = df.merge(
-        df_int[["phone_norm", "tiene hipoteca?"]],
-        on="phone_norm", how="left",
-    )
+    df = df.merge(df_int[["phone_norm", "tiene hipoteca?"]], on="phone_norm", how="left")
 else:
     df["tiene hipoteca?"] = None
 
-df["aplica"] = df["aplica"].fillna("pending")
 df["contactado"] = df["contesto?"].fillna("").astype(str).str.strip().ne("")
 df["con_hipoteca"] = (
     df["tiene hipoteca?"].fillna("").astype(str).str.strip().str.lower() == "si"
@@ -153,11 +151,11 @@ def _status(row) -> str:
 df["status"] = df.apply(_status, axis=1)
 
 STATUS_COLORS = {
-    "aplica_contactado":         GREEN_DARK,
-    "aplica_pendiente_llamar":   GREEN_LIGHT,
-    "pendiente_score":           YELLOW,
-    "no_aplica":                 GREY,
-    "error":                     RED,
+    "aplica_contactado":       GREEN_DARK,
+    "aplica_pendiente_llamar": GREEN_LIGHT,
+    "pendiente_score":         YELLOW,
+    "no_aplica":               GREY,
+    "error":                   RED,
 }
 STATUS_LABELS = {
     "aplica_contactado":       "Aplica + contactado",
@@ -169,20 +167,43 @@ STATUS_LABELS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Estado de persistencia
+# ─────────────────────────────────────────────────────────────────────────────
+with st.expander("Estado de consulta de scores", expanded=False):
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("API configurado", "Sí" if score_stats.get("api_configured") else "No")
+    c2.metric("Desde cache (Sheet)", score_stats.get("cached", 0))
+    c3.metric("Consultados ahora", score_stats.get("consulted", 0))
+    c4.metric("Pendientes (sin API)", score_stats.get("pending", 0))
+    c5.metric("Escritos al Sheet", score_stats.get("written", 0))
+    if score_stats.get("write_error"):
+        st.error(
+            f"No pude escribir al Sheet: {score_stats['write_error']}\n\n"
+            "→ Da permisos de **Editor** al service account "
+            "`ctl-reader-service@try12-455405.iam.gserviceaccount.com` en el share del Sheet."
+        )
+    if not score_stats.get("api_configured"):
+        st.info(
+            "Configura `SCORE_API_URL` y `SCORE_API_TOKEN` en Streamlit Secrets para "
+            "consultar el score en vivo. Mientras tanto, los leads sin valor en la "
+            "columna **Aplica** del Sheet aparecen como pendientes."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # KPIs
 # ─────────────────────────────────────────────────────────────────────────────
 n_leads = len(df)
-n_tc = int(df["contesto?"].notna().sum())
+n_contactados = int(df["contactado"].sum())
 n_interes = int((df["contesto?"].astype(str).str.lower() == "si").sum())
 n_aplica = int(df["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"]).sum())
 n_call_list = int((df["status"] == "aplica_pendiente_llamar").sum())
-n_pendiente_score = int((df["status"] == "pendiente_score").sum())
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.markdown(kpi_card("Leads T&C", n_leads, "filas en Sheet Leads"), unsafe_allow_html=True)
-c2.markdown(kpi_card("Contactados", int(df["contactado"].sum()), f"{int(df['contactado'].sum())/max(1,n_leads):.0%}"), unsafe_allow_html=True)
+c1.markdown(kpi_card("Leads T&C", n_leads, "Sheet Leads"), unsafe_allow_html=True)
+c2.markdown(kpi_card("Contactados", n_contactados, f"{n_contactados/max(1,n_leads):.0%}"), unsafe_allow_html=True)
 c3.markdown(kpi_card("Interés activo", n_interes, f"{n_interes/max(1,n_leads):.0%}"), unsafe_allow_html=True)
-c4.markdown(kpi_card("Elegibles", n_aplica, "score ≥720 + sin hipoteca"), unsafe_allow_html=True)
+c4.markdown(kpi_card("Elegibles", n_aplica, "score≥720 + sin hipoteca"), unsafe_allow_html=True)
 c5.markdown(kpi_card("Por llamar", n_call_list, "aplican y no contactados"), unsafe_allow_html=True)
 
 
@@ -191,7 +212,6 @@ c5.markdown(kpi_card("Por llamar", n_call_list, "aplican y no contactados"), uns
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Pipeline de leads</h2>", unsafe_allow_html=True)
 
-# Leyenda
 legend_html = "<div style='font-size:0.78rem;color:#444;margin-bottom:8px'>"
 for k, c in STATUS_COLORS.items():
     legend_html += (
@@ -201,37 +221,11 @@ for k, c in STATUS_COLORS.items():
 legend_html += "</div>"
 st.markdown(legend_html, unsafe_allow_html=True)
 
-if not score_src.is_configured():
-    st.info(
-        "ℹ️ `SCORE_API_URL` y `SCORE_API_TOKEN` no están configurados → todos los "
-        "leads aparecen como **Pendiente de score**. Defínelos en `.env` (local) o "
-        "Streamlit Secrets para activar la consulta en vivo."
-    )
-
 DISPLAY_COLS = ["nombre_completo", "telefono", "cedula", "grupo",
-                "contesto?", "tiene hipoteca?", "score", "aplica", "status"]
-disp = df[[c for c in DISPLAY_COLS if c in df.columns]].copy()
-disp = disp.rename(columns={
-    "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
-    "grupo": "Grupo", "contesto?": "Contesto?", "tiene hipoteca?": "Hipoteca?",
-    "score": "Score", "aplica": "Aplica",
-    "status": "_status",
-})
-
-
-def _row_color(row):
-    color = STATUS_COLORS.get(row["_status"], "")
-    text = "white" if row["_status"] in ("aplica_contactado", "error") else "#222"
-    return [f"background-color:{color};color:{text}" for _ in row.index]
-
-
-styled = disp.drop(columns=["_status"]).style.apply(
-    lambda _r: _row_color(disp.loc[_r.name]), axis=1
-)
-
-# Orden: call list primero
+                "contesto?", "tiene hipoteca?", "score", "nivel_riesgo", "aplica"]
+disp = df[[c for c in DISPLAY_COLS if c in df.columns] + ["status"]].copy()
 disp_sorted = disp.sort_values(
-    by="_status",
+    by="status",
     key=lambda s: s.map({
         "aplica_pendiente_llamar": 0,
         "pendiente_score": 1,
@@ -240,22 +234,51 @@ disp_sorted = disp.sort_values(
         "error": 4,
     }).fillna(99),
 ).reset_index(drop=True)
-styled_sorted = disp_sorted.drop(columns=["_status"]).style.apply(
-    lambda _r: _row_color(disp_sorted.loc[_r.name]), axis=1
-)
 
-st.dataframe(styled_sorted, hide_index=True, use_container_width=True)
+
+def _row_color(row_idx):
+    s = disp_sorted.loc[row_idx, "status"]
+    color = STATUS_COLORS.get(s, "")
+    text = "white" if s in ("aplica_contactado", "error") else "#222"
+    return [f"background-color:{color};color:{text}" for _ in range(len(disp_sorted.columns) - 1)]
+
+
+styled = (
+    disp_sorted.drop(columns=["status"])
+    .rename(columns={
+        "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
+        "grupo": "Grupo", "contesto?": "Contesto?", "tiene hipoteca?": "Hipoteca?",
+        "score": "Score", "nivel_riesgo": "Nivel", "aplica": "Aplica",
+    })
+    .style.apply(lambda r: _row_color(r.name), axis=1)
+)
+st.dataframe(styled, hide_index=True, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Funnel
+# Funnel completo (replica del dashboard original)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Embudo del experimento</h2>", unsafe_allow_html=True)
 
-n_contactados = int(df["contactado"].sum())
-f_labels = ["Firmaron T&C", "Contactados", "Interés activo", "Aplican", "Por llamar"]
-f_vals   = [n_leads, n_contactados, n_interes, n_aplica, n_call_list]
-f_colors = [DEEP, PRIMARY, MED, ACCENT, LIGHT]
+baseline = EXPERIMENT.funnel_baseline
+# stages: (label, value, is_live)
+stages: list[tuple[str, int, bool]] = []
+stages.append(("Leads elegibles", baseline.get("Leads elegibles", 0), False))
+
+# Live count for enviados via Infobip (if available)
+infobip_n = load_infobip_count()
+stages.append(("Enviados WA", infobip_n if infobip_n else baseline.get("Enviados WA", 0), bool(infobip_n)))
+stages.append(("Entregados WA", baseline.get("Entregados WA", 0), False))
+stages.append(("Abrieron link", baseline.get("Abrieron link", 0), False))
+stages.append(("T&C firmados", n_leads, True))
+stages.append(("Contactados", n_contactados, True))
+stages.append(("Interés activo", n_interes, True))
+stages.append(("Aprobados riesgo (aplica)", n_aplica, True))
+stages.append(("Elegibles (sin hipoteca)", n_aplica - int(df["con_hipoteca"].sum()), True))
+
+f_labels = [f"{lbl}{' *' if not live else ''}" for lbl, _, live in stages]
+f_vals = [v for _, v, _ in stages]
+f_colors = [DEEP, PRIMARY, MED, ACCENT, LIGHT, "#9ecae1", GREEN_DARK, "#1a7a50", "#0f5535"][:len(stages)]
 f_text = [
     f"{v:,}  ({v/f_vals[i-1]*100:.0f}%)" if i > 0 and f_vals[i-1] > 0 else f"{v:,}"
     for i, v in enumerate(f_vals)
@@ -269,18 +292,18 @@ fig_funnel = go.Figure(go.Bar(
 fig_funnel.update_layout(
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=320, margin=dict(l=10, r=140, t=10, b=10),
-    xaxis=dict(gridcolor="#ede8f5", tickformat=",d"),
+    height=420, margin=dict(l=10, r=220, t=10, b=10),
+    xaxis=dict(type="log", title="Clientes (escala log)", gridcolor="#ede8f5", tickformat=",d"),
     yaxis=dict(autorange="reversed"),
 )
 st.plotly_chart(fig_funnel, use_container_width=True)
+st.caption("\\* etapas con baseline histórico — todavía no hay fuente live conectada (Infobip delivery/open, BQ landing tracking).")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A/B test
+# A/B
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>A/B · AH (84m) vs BH (120m)</h2>", unsafe_allow_html=True)
-
 if "grupo" in df.columns:
     ab = (
         df.groupby("grupo")
@@ -298,10 +321,9 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Entrevistas cualitativas
+# Entrevistas
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Entrevistas cualitativas</h2>", unsafe_allow_html=True)
-
 if df_int.empty:
     st.info("La pestaña Entrevista está vacía.")
 else:
@@ -311,14 +333,13 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HubSpot deals
+# HubSpot
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>HubSpot · deals con flag fakedoor (desde 20 abr)</h2>", unsafe_allow_html=True)
-
+st.markdown(f"<h2>HubSpot · deals con flag fakedoor (desde {EXPERIMENT.start_date})</h2>", unsafe_allow_html=True)
 try:
     df_hs = load_hs_deals()
     if df_hs.empty:
-        st.info("HubSpot no devolvió deals con `flag_fakedoor` ≥ 20 abr 2026.")
+        st.info("HubSpot no devolvió deals.")
     else:
         df_hs_display = df_hs.rename(columns=hs_src.FAKEDOOR_PROPS)
         st.dataframe(df_hs_display, hide_index=True, use_container_width=True)
@@ -332,20 +353,13 @@ try:
             else:
                 st.write("Propiedades con % NaN (las que están al 100% probablemente tienen otro internal name):")
                 st.dataframe(empty.to_frame("% NaN"), use_container_width=True)
-                st.caption(
-                    "Si ves 100% NaN en alguna propiedad custom, dime el label exacto en HubSpot "
-                    "y la cambio. Internal names se ven en HubSpot → Settings → Properties."
-                )
 except Exception as exc:
     st.error(f"Error consultando HubSpot: {type(exc).__name__}: {exc}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Footer
-# ─────────────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption(
     f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
-    "TTL cache 120s (Sheets) · 300s (HubSpot) · 600s (Scores). "
-    "Refresca la página para forzar pull."
+    "TTL cache: 120s. Scores ya consultados quedan persistidos en las "
+    "columnas `Aplica` y `Metadata` del Sheet."
 )

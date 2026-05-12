@@ -15,6 +15,9 @@ class Experiment:
     page: str                  # Ruta a la pagina .py en pages/
     description: str = ""
     attachments: list[str] = field(default_factory=list)  # rutas relativas a docs embebidos
+    # Etapas del funnel que NO tenemos en vivo (delivery/open stats de WA).
+    # Los valores live se computan en la página.
+    funnel_baseline: dict = field(default_factory=dict)
 
 
 REGISTRY: list[Experiment] = [
@@ -31,6 +34,12 @@ REGISTRY: list[Experiment] = [
             "sobre la base de descartes de Habi Sellers. A/B AH=84m vs BH=120m."
         ),
         attachments=["experiments/fakedoor_habicapital/funnel.md"],
+        funnel_baseline={
+            "Leads elegibles":   2670,
+            "Enviados WA":       1234,
+            "Entregados WA":     1125,
+            "Abrieron link":     377,
+        },
     ),
     Experiment(
         slug="demo-multi-fuente",
