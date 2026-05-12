@@ -62,17 +62,22 @@ def _norm_phone(s: object) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Loaders
+# Loaders — TTL largo (24h) para fuentes pesadas (HubSpot, BigQuery), corto
+# para Sheets (cambia con cada submit). persist="disk" sobrevive a reload.
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=120, show_spinner="HubSpot · deals fakedoor…")
+DAY = 86400      # 24h
+SHORT = 120      # 2 min
+
+
+@st.cache_data(ttl=DAY, show_spinner="HubSpot · deals fakedoor…", persist="disk")
 def load_hs_deals() -> pd.DataFrame:
     # Sin filtro de fecha — universo = todos los deals con flag_fakedoor.
     return hs_src.fetch_fakedoor_deals(since_iso=None)
 
 
-@st.cache_data(ttl=3600, show_spinner="HubSpot · catálogo de propiedades…")
+@st.cache_data(ttl=DAY, show_spinner="HubSpot · catálogo de propiedades…", persist="disk")
 def load_property_labels() -> dict[str, dict[str, str]]:
-    """value→label por propiedad enum. Se cachea 1h porque casi nunca cambia."""
+    """value→label por propiedad enum. Casi nunca cambia."""
     result: dict[str, dict[str, str]] = {}
     for prop in ("estado", "oportunidad_del_negocio"):
         try:
@@ -82,7 +87,7 @@ def load_property_labels() -> dict[str, dict[str, str]]:
     return result
 
 
-@st.cache_data(ttl=120, show_spinner="Leads + scores (Sheet cache)…")
+@st.cache_data(ttl=SHORT, show_spinner="Leads del Sheet…")
 def load_leads_with_scores() -> tuple[pd.DataFrame, dict]:
     df_raw = gs_src.fetch_tab("Leads")
     if df_raw.empty:
@@ -90,7 +95,7 @@ def load_leads_with_scores() -> tuple[pd.DataFrame, dict]:
     return score_src.enrich_leads_with_scores(df_raw, tab="Leads", cedula_col="cedula")
 
 
-@st.cache_data(ttl=120, show_spinner="Entrevistas…")
+@st.cache_data(ttl=SHORT, show_spinner="Entrevistas…")
 def load_entrevistas() -> pd.DataFrame:
     df = gs_src.fetch_tab("Entrevista")
     if not df.empty and "telefono" in df.columns:
@@ -99,13 +104,16 @@ def load_entrevistas() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="BigQuery · eventos de landing…")
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos de landing…", persist="disk")
 def load_landing_events() -> pd.DataFrame:
     try:
         return bq_src.fetch_fakedoor_landing_events()
     except Exception as exc:
         st.warning(f"BigQuery falló: {type(exc).__name__}: {exc}")
-        return pd.DataFrame(columns=["uuid", "total_events", "had_pages", "had_tracks", "reached_consent"])
+        return pd.DataFrame(columns=[
+            "uuid", "total_events", "had_pages", "had_tracks",
+            "visited_home", "visited_solicitud", "visited_consent", "reached_consent",
+        ])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,6 +173,17 @@ estados_all = _unique(df_hs.get("estado_label", pd.Series(dtype=str)))
 oport_all = _unique(df_hs.get("oportunidad_del_negocio_label", pd.Series(dtype=str)))
 
 with st.sidebar:
+    # Botón de refresh manual — clear cache + rerun
+    if st.button("🔄 Actualizar datos", use_container_width=True,
+                  help="Limpia el cache de HubSpot/BigQuery/Sheets y vuelve a pegar los APIs"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption(
+        "Cache: HubSpot/BigQuery se refrescan cada 24h; Sheets cada 2 min. "
+        "Usa el botón si necesitas datos al instante."
+    )
+    st.markdown("---")
+
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
 
     st.markdown("### Variante")
@@ -248,7 +267,13 @@ if _applied(sel_oport, oport_all):
 if _applied(sel_estados, estados_all):
     df_in = df_in[df_in["estado_label"].isin(sel_estados)]
 
-df_in["contactado"] = df_in["contesto?"].fillna("").astype(str).str.strip().ne("")
+# contactado = el teléfono aparece en la pestaña Entrevista. La pestaña
+# Entrevista es la fuente de verdad de a quiénes ya se llamó. Los que aplican
+# y NO están ahí son la call list activa ("Aplica + LLAMAR", verde claro).
+entrevista_phones: set[str] = set()
+if not df_int.empty and "phone_norm" in df_int.columns:
+    entrevista_phones = set(df_int["phone_norm"].dropna().astype(str))
+df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
 df_in["con_hipoteca"] = (
     df_in["tiene hipoteca?"].fillna("").astype(str).str.strip().str.lower() == "si"
 )
