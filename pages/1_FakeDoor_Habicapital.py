@@ -423,11 +423,14 @@ else:
 # Etapa 3: Enviados WA = 77% × Con conjunto (Infobip delivery historico)
 delivery_ratio = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.77)
 n_e3 = int(round(n_e2 * delivery_ratio))
-# Etapa 4: Abrieron pagina (BQ pages ∩ HS allowed)
-if allowed_uuids and pages_uuids:
-    n_e4 = len(allowed_uuids & pages_uuids)
+# Etapa 4: Abrieron pagina — usamos `ab_test_landing` de HubSpot. La JS del
+# front setea la propiedad solo cuando el cliente carga la landing y se le
+# asigna celda (AH/BH). Es más confiable que Segment, que pierde eventos
+# cuando el tracker no ejecuta. n_e4 = AH + BH del universo filtrado.
+if not df_hs_f.empty and "ab_test_landing" in df_hs_f.columns:
+    n_e4 = int(df_hs_f["ab_test_landing"].astype(str).isin(["AH", "BH"]).sum())
 else:
-    n_e4 = len(pages_uuids) if not allowed_uuids else 0
+    n_e4 = 0
 # Etapa 5: T&C firmados (Sheet ∩ HS)
 n_e5 = n_leads
 # Etapa 6: Elegibles (Aplica=si — pasaron score del motor)
@@ -439,7 +442,7 @@ stages = [
     ("Universo (flag fakedoor)",   n_e1, "HubSpot · sin filtro de fecha"),
     ("Con nombre del conjunto",    n_e2, "HubSpot · nombre_del_conjunto ≠ vacío"),
     (f"Enviados WA",                n_e3, f"Estimado · {int(delivery_ratio*100)}% × Con conjunto"),
-    ("Abrieron página",             n_e4, "BigQuery · pages ∩ HS"),
+    ("Abrieron página",             n_e4, "HubSpot · ab_test_landing ∈ {AH, BH}"),
     ("T&C firmados",                n_e5, "Sheets/Leads ∩ HS"),
     ("Elegibles",                   n_e6, "Aplica=si"),
     ("Aplican (sin hipoteca)",      n_e7, "Aplica=si + hipoteca confirmada NO"),
