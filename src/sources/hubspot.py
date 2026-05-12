@@ -14,11 +14,11 @@ FAKEDOOR_PROPS: dict[str, str] = {
     "hubspot_owner_id":             "Propietario del negocio",
     "pipeline":                     "Pipeline",
     "createdate":                   "Fecha de creación",
-    "dealstage":                    "Estado del Negocio",
+    "estado":                       "Estado del Negocio",
     "deal_uuid":                    "deal_uuid",
     "flag_fakedoor":                "flag fakedoor",
     "negocio_aplica_para_bnpl":     "¿Negocio aplica para BNPL?",
-    "oportunidad_del_negocio_co":   "Oportunidad del negocio (CO)",
+    "oportunidad_del_negocio":      "Oportunidad del negocio (CO)",
     "phone":                        "Teléfono",
     "nombre_del_conjunto":          "nombre del conjunto",
     "abc_test_landing_co":          "ABC test landing Co",
@@ -47,7 +47,7 @@ def compute_fuente(row) -> str:
     remo = str(row.get("comite_remodelaciones", "")).strip()
     if remo and remo not in ("nan",) and remo in REMO_VALUES:
         return "Rechazos Remo"
-    op = str(row.get("oportunidad_del_negocio_co", "")).strip()
+    op = str(row.get("oportunidad_del_negocio", "")).strip()
     if op == "Descartado por comité":
         return "Rechazos Comite"
     return "MM + Inmo"

@@ -61,7 +61,7 @@ Multipágina nativo de Streamlit: cualquier `.py` en `pages/` aparece en el side
 
 | Fuente | Qué aporta | Cómo se accede |
 |---|---|---|
-| **HubSpot** · CRM Deals | Universo del experimento, propiedades custom (flag_fakedoor, ab_test_landing, comite_remodelaciones, oportunidad_del_negocio_co, nombre_del_conjunto, etc.) | API v3 `/crm/v3/objects/deals/search` con filtro `flag_fakedoor HAS_PROPERTY` + `createdate >= start_date`. Pagina hasta agotar. |
+| **HubSpot** · CRM Deals | Universo del experimento, propiedades custom (flag_fakedoor, ab_test_landing, comite_remodelaciones, oportunidad_del_negocio, nombre_del_conjunto, etc.) | API v3 `/crm/v3/objects/deals/search` con filtro `flag_fakedoor HAS_PROPERTY` + `createdate >= start_date`. Pagina hasta agotar. |
 | **Google Sheets** · pestaña `Leads` | Leads que completaron T&C (formulario público). cedula, telefono, grupo (AH/BH), contesto?, y columnas persistidas `Aplica` + `Metadata`. | gspread con scope `spreadsheets` + `drive`. Service account `ctl-reader-service@try12-455405.iam.gserviceaccount.com` con permiso **Editor**. |
 | **Google Sheets** · pestaña `Entrevista` | 12 entrevistas cualitativas (P1–P9, tiene hipoteca?). | gspread (mismo client). |
 | **Google Sheets** · pestaña `Infobip` | Teléfonos a los que se envió WhatsApp. Headers vacíos → `fetch_tab` cae a `get_all_values()`. | gspread. |
@@ -148,10 +148,10 @@ Los 4 del dashboard original (`/Users/usermac/Hc/resultadosfakedoor/dashboard.py
 - **Fuente** → calculada con `hubspot.compute_fuente`:
   - `"Top"` si `flag_fakedoor == "Top"`
   - `"Rechazos Remo"` si `comite_remodelaciones` ∈ {4 valores fijos}
-  - `"Rechazos Comite"` si `oportunidad_del_negocio_co == "Descartado por comité"`
+  - `"Rechazos Comite"` si `oportunidad_del_negocio == "Descartado por comité"`
   - `"MM + Inmo"` por defecto
-- **Oportunidad del Negocio** → `oportunidad_del_negocio_co`
-- **Estado del Negocio** → `dealstage`
+- **Oportunidad del Negocio** → `oportunidad_del_negocio`
+- **Estado del Negocio** → `estado` (custom de Habi, NO el `dealstage` estándar de HubSpot)
 
 Cada filtro narrows down `df_hs` y propaga al funnel, distribuciones, pipeline y tabla raw.
 
@@ -195,7 +195,7 @@ Cuatro gráficos sobre `df_hs` filtrado:
 
 ### Tabla raw de deals filtrados
 
-Vista tabular de los HubSpot deals que pasaron los filtros, con columnas clave (dealname, phone, createdate, dealstage, fuente, flag, variante, oportunidad, conjunto, comite_remodelaciones, deal_uuid). Útil para inspeccionar el universo después de filtrar.
+Vista tabular de los HubSpot deals que pasaron los filtros, con columnas clave (dealname, phone, createdate, estado, fuente, flag, variante, oportunidad, conjunto, comite_remodelaciones, deal_uuid). Útil para inspeccionar el universo después de filtrar.
 
 ### Insights de entrevistas
 

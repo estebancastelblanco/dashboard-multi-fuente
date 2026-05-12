@@ -153,8 +153,8 @@ def _unique(series: pd.Series) -> list[str]:
 
 variantes_all = _unique(df_hs.get("ab_test_landing", pd.Series(dtype=str)))
 fuentes_all = [f for f in hs_src.FUENTES if f in set(df_hs.get("fuente", pd.Series()).dropna().unique())]
-estados_all = _unique(df_hs.get("dealstage", pd.Series(dtype=str)))
-oport_all = _unique(df_hs.get("oportunidad_del_negocio_co", pd.Series(dtype=str)))
+estados_all = _unique(df_hs.get("estado", pd.Series(dtype=str)))
+oport_all = _unique(df_hs.get("oportunidad_del_negocio", pd.Series(dtype=str)))
 
 with st.sidebar:
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
@@ -190,9 +190,9 @@ if not df_hs_f.empty:
     if len(sel_fuentes) < len(hs_src.FUENTES):
         df_hs_f = df_hs_f[df_hs_f["fuente"].isin(sel_fuentes)]
     if len(sel_oport) < len(oport_all):
-        df_hs_f = df_hs_f[df_hs_f["oportunidad_del_negocio_co"].isin(sel_oport) | df_hs_f["oportunidad_del_negocio_co"].isna()]
+        df_hs_f = df_hs_f[df_hs_f["oportunidad_del_negocio"].isin(sel_oport) | df_hs_f["oportunidad_del_negocio"].isna()]
     if len(sel_estados) < len(estados_all):
-        df_hs_f = df_hs_f[df_hs_f["dealstage"].isin(sel_estados) | df_hs_f["dealstage"].isna()]
+        df_hs_f = df_hs_f[df_hs_f["estado"].isin(sel_estados) | df_hs_f["estado"].isna()]
 
 allowed_uuids: set[str] = set(df_hs_f["deal_uuid"].dropna().astype(str)) if not df_hs_f.empty else set()
 
@@ -400,9 +400,9 @@ else:
         st.plotly_chart(_pie(df_hs_f["fuente"], "Fuente", [DEEP, PRIMARY, MED, ACCENT]), use_container_width=True)
         st.plotly_chart(_pie(df_hs_f["ab_test_landing"], "Variante A/B", [PRIMARY, ACCENT, PALE, LIGHT]), use_container_width=True)
     with col_b:
-        if "oportunidad_del_negocio_co" in df_hs_f.columns:
+        if "oportunidad_del_negocio" in df_hs_f.columns:
             # Barras horizontales en lugar de pie (suele haber muchas categorías)
-            op_c = df_hs_f["oportunidad_del_negocio_co"].fillna("(sin valor)").value_counts().reset_index()
+            op_c = df_hs_f["oportunidad_del_negocio"].fillna("(sin valor)").value_counts().reset_index()
             op_c.columns = ["Oportunidad", "N"]
             op_c = op_c.sort_values("N", ascending=True).tail(10)
             fig_op = go.Figure(go.Bar(
@@ -418,8 +418,8 @@ else:
                 yaxis=dict(gridcolor="#ede8f5"), xaxis=dict(gridcolor="#ede8f5"),
             )
             st.plotly_chart(fig_op, use_container_width=True)
-        if "dealstage" in df_hs_f.columns:
-            es_c = df_hs_f["dealstage"].fillna("(sin valor)").value_counts().reset_index()
+        if "estado" in df_hs_f.columns:
+            es_c = df_hs_f["estado"].fillna("(sin valor)").value_counts().reset_index()
             es_c.columns = ["Estado", "N"]
             es_c = es_c.sort_values("N", ascending=True).tail(10)
             fig_es = go.Figure(go.Bar(
@@ -500,9 +500,9 @@ if df_hs_f.empty:
     st.info("Sin deals con los filtros aplicados.")
 else:
     show_cols = [
-        "dealname", "phone", "createdate", "dealstage",
+        "dealname", "phone", "createdate", "estado",
         "fuente", "flag_fakedoor", "ab_test_landing",
-        "oportunidad_del_negocio_co", "nombre_del_conjunto",
+        "oportunidad_del_negocio", "nombre_del_conjunto",
         "comite_remodelaciones", "deal_uuid",
     ]
     show_cols = [c for c in show_cols if c in df_hs_f.columns]
