@@ -202,6 +202,23 @@ with st.sidebar:
     st.markdown("### Estado del Negocio")
     sel_estados = st.multiselect("estados", estados_all, default=estados_all, label_visibility="collapsed")
 
+    HIPO_STATUS_OPTS = ["Sí", "No", "Sin dato"]
+    HIPO_FUENTE_OPTS = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
+
+    st.markdown("### Hipoteca")
+    sel_hipoteca = st.multiselect(
+        "hipoteca", HIPO_STATUS_OPTS, default=HIPO_STATUS_OPTS,
+        label_visibility="collapsed",
+        help="Tiene / no tiene / sin dato — sobre elegibles",
+    )
+
+    st.markdown("### Fuente del dato de hipoteca")
+    sel_hipo_fuente = st.multiselect(
+        "hipoteca_fuente", HIPO_FUENTE_OPTS, default=HIPO_FUENTE_OPTS,
+        label_visibility="collapsed",
+        help="Cómo se conoció el estado de hipoteca",
+    )
+
     st.markdown("---")
 
 
@@ -292,21 +309,27 @@ df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
 def _hipoteca(row) -> tuple[str, str]:
     e = str(row.get("tiene hipoteca?", "") or "").strip().lower().replace("í", "i")
     if e == "si":
-        return "Sí", "Entrevista"
+        return "Sí", "Contacto"
     if e == "no":
-        return "No", "Entrevista"
+        return "No", "Contacto"
     b = str(row.get("negocio_aplica_para_bnpl", "") or "").strip().lower().replace("í", "i")
     if b == "no":
-        return "Sí", "HubSpot BNPL"
+        return "Sí", "BNPL (HubSpot)"
     if b == "si":
-        return "No", "HubSpot BNPL"
-    return "Sin dato", "Sin fuente"
+        return "No", "BNPL (HubSpot)"
+    return "Sin dato", "Sin contactar"
 
 
 hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
 hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
 df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
+
+# Filtros de hipoteca — solo narrow cuando el usuario deselecciona algo.
+if _applied(sel_hipoteca, HIPO_STATUS_OPTS):
+    df_in = df_in[df_in["hipoteca_status"].isin(sel_hipoteca)]
+if _applied(sel_hipo_fuente, HIPO_FUENTE_OPTS):
+    df_in = df_in[df_in["hipoteca_fuente"].isin(sel_hipo_fuente)]
 
 
 def _status(row) -> str:
@@ -741,60 +764,71 @@ elegibles_h = df_in[df_in["aplica"] == "si"].copy()
 n_elegibles_h = len(elegibles_h)
 
 if n_elegibles_h == 0:
-    st.info("Aún no hay elegibles para evaluar hipoteca.")
+    st.info("Aún no hay elegibles con los filtros actuales.")
 else:
-    # Conteos cruzados status × fuente
-    cross = (
-        elegibles_h.groupby(["hipoteca_status", "hipoteca_fuente"])
-        .size().reset_index(name="N")
-    )
     n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
     n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
     n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
 
     st.caption(
-        f"{n_elegibles_h} elegibles · {n_si} tienen hipoteca · {n_no} sin hipoteca · "
-        f"{n_sd} sin contactar (call list de hipoteca). "
-        "Si hay dato en la entrevista, gana sobre la propiedad de HubSpot."
+        f"{n_elegibles_h} elegibles · {n_si} con hipoteca · {n_no} sin hipoteca · "
+        f"{n_sd} sin contactar. La entrevista gana sobre la propiedad de HubSpot."
     )
 
-    # Barra horizontal apilada: filas = status, stack por fuente
+    # Matriz 3×3: filas = status hipoteca, columnas = fuente del dato
     status_order = ["Sí", "No", "Sin dato"]
-    fuentes_order = ["Entrevista", "HubSpot BNPL", "Sin fuente"]
-    fuente_colors = {
-        "Entrevista":   PRIMARY,
-        "HubSpot BNPL": ACCENT,
-        "Sin fuente":   GREY,
-    }
-    pivot = (
-        cross.pivot(index="hipoteca_status", columns="hipoteca_fuente", values="N")
-        .reindex(status_order).fillna(0)
+    fuente_order = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
+    matrix = (
+        elegibles_h.groupby(["hipoteca_status", "hipoteca_fuente"])
+        .size().unstack(fill_value=0)
+        .reindex(index=status_order, columns=fuente_order, fill_value=0)
+        .astype(int)
     )
-    # asegurar todas las columnas de fuente existen
-    for f in fuentes_order:
-        if f not in pivot.columns:
-            pivot[f] = 0
-    pivot = pivot[fuentes_order]
+    z = matrix.values
+
+    # Colores: cada celda según el status. Sí=rojo (no aplica),
+    # No=verde (aplica), Sin dato=gris.
+    row_colors = {"Sí": "#EF5350", "No": "#1B5E20", "Sin dato": "#9E9E9E"}
+    color_grid = []
+    for status in status_order:
+        base = row_colors[status]
+        color_grid.append([
+            base if z[status_order.index(status)][j] > 0 else "#F4F1F9"
+            for j in range(len(fuente_order))
+        ])
 
     fig_h = go.Figure()
-    for f in fuentes_order:
-        vals = pivot[f].astype(int).tolist()
-        fig_h.add_trace(go.Bar(
-            y=status_order, x=vals, orientation="h",
-            name=f, marker_color=fuente_colors[f],
-            text=[v if v > 0 else "" for v in vals],
-            textposition="inside", insidetextanchor="middle",
-            textfont=dict(color="#fff", size=12),
-            hovertemplate="<b>%{y}</b> · " + f + " · %{x}<extra></extra>",
-        ))
+    for i, status in enumerate(status_order):
+        for j, fuente in enumerate(fuente_order):
+            val = int(z[i][j])
+            color = color_grid[i][j]
+            txt_color = "#fff" if val > 0 else "#bbb"
+            fig_h.add_trace(go.Scatter(
+                x=[fuente], y=[status],
+                mode="markers+text",
+                marker=dict(size=130, color=color, line=dict(color=DEEP, width=1),
+                            symbol="square"),
+                text=[f"<b>{val}</b>"], textfont=dict(size=22, color=txt_color),
+                textposition="middle center",
+                hovertemplate=f"<b>{status}</b> · {fuente} · {val} elegibles<extra></extra>",
+                showlegend=False,
+            ))
     fig_h.update_layout(
-        barmode="stack",
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        height=260, margin=dict(l=10, r=20, t=10, b=10),
-        xaxis=dict(title="Elegibles", gridcolor="#ede8f5", tickformat=",d"),
-        yaxis=dict(autorange="reversed"),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+        font=dict(family="Inter, sans-serif", color=DEEP, size=12),
+        height=360, margin=dict(l=10, r=10, t=20, b=40),
+        xaxis=dict(
+            title=dict(text="Fuente del dato", font=dict(size=12, color=MED)),
+            categoryorder="array", categoryarray=fuente_order,
+            showgrid=False, zeroline=False,
+            range=[-0.5, len(fuente_order) - 0.5],
+        ),
+        yaxis=dict(
+            title=dict(text="¿Tiene hipoteca?", font=dict(size=12, color=MED)),
+            categoryorder="array", categoryarray=status_order,
+            autorange="reversed", showgrid=False, zeroline=False,
+            range=[-0.5, len(status_order) - 0.5],
+        ),
     )
     st.plotly_chart(fig_h, use_container_width=True)
 
