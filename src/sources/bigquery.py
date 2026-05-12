@@ -64,3 +64,38 @@ def fetch_top_inmuebles(limit: int = 10) -> pd.DataFrame:
         LIMIT {int(limit)}
     """
     return _client().query(sql).to_dataframe()
+
+
+def fetch_fakedoor_landing_events() -> pd.DataFrame:
+    """UUIDs que visitaron la landing del fake door y si llegaron a consentimiento.
+
+    Cruza `sellers-main-prod.javascript9.pages` y `tracks` filtrando por la URL
+    `https://habicapitalliquidez.vercel.app/%`. Devuelve un DataFrame con:
+      - uuid
+      - total_events
+      - reached_consent (bool, 1 si visito /consentimiento/<uuid>)
+    """
+    sql = r"""
+    WITH urls AS (
+      SELECT context_page_url,
+             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid
+      FROM `sellers-main-prod.javascript9.pages`
+      WHERE context_page_url IS NOT NULL
+        AND context_page_url LIKE 'https://habicapitalliquidez.vercel.app/%'
+      UNION ALL
+      SELECT context_page_url,
+             REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid
+      FROM `sellers-main-prod.javascript9.tracks`
+      WHERE context_page_url IS NOT NULL
+        AND context_page_url LIKE 'https://habicapitalliquidez.vercel.app/%'
+    )
+    SELECT
+      uuid,
+      COUNT(*) AS total_events,
+      COUNTIF(context_page_url LIKE '%/consentimiento/%') AS consent_events,
+      MAX(IF(context_page_url LIKE '%/consentimiento/%', 1, 0)) AS reached_consent
+    FROM urls
+    WHERE uuid IS NOT NULL
+    GROUP BY uuid
+    """
+    return _client().query(sql).to_dataframe()
