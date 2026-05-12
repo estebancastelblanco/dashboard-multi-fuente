@@ -383,7 +383,14 @@ n_universe = len(df_hs_f) if not df_hs_f.empty else 0
 n_leads = len(df_in)
 n_contactados = int(df_in["contactado"].sum())
 n_interes = int((df_in["contesto?"].astype(str).str.lower() == "si").sum())
-n_aplica = int(df_in["status"].isin(["aplica_contactado", "aplica_pendiente_llamar"]).sum())
+# Elegibles = pasaron score (Aplica=si). El filtro de hipoteca se aplica
+# en la última etapa del funnel y en la sección Hipoteca.
+n_aplica = int((df_in["aplica"].astype(str).str.lower() == "si").sum())
+# Confirmados sin hipoteca = elegibles + hipoteca_status="No" (entrevista o BNPL).
+n_aplica_sin_hip = int(
+    ((df_in["aplica"].astype(str).str.lower() == "si") &
+     (df_in["hipoteca_status"] == "No")).sum()
+)
 n_call_list = int((df_in["status"] == "aplica_pendiente_llamar").sum())
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -423,10 +430,10 @@ else:
     n_e4 = len(pages_uuids) if not allowed_uuids else 0
 # Etapa 5: T&C firmados (Sheet ∩ HS)
 n_e5 = n_leads
-# Etapa 6: Elegibles (aplica = "si")
+# Etapa 6: Elegibles (Aplica=si — pasaron score del motor)
 n_e6 = n_aplica
-# Etapa 7: Aplican (elegibles sin hipoteca)
-n_e7 = n_aplica - int(df_in["con_hipoteca"].sum())
+# Etapa 7: Aplican = elegibles con hipoteca confirmada en NO (entrevista o BNPL).
+n_e7 = n_aplica_sin_hip
 
 stages = [
     ("Universo (flag fakedoor)",   n_e1, "HubSpot · sin filtro de fecha"),
@@ -435,7 +442,7 @@ stages = [
     ("Abrieron página",             n_e4, "BigQuery · pages ∩ HS"),
     ("T&C firmados",                n_e5, "Sheets/Leads ∩ HS"),
     ("Elegibles",                   n_e6, "Aplica=si"),
-    ("Aplican (sin hipoteca)",      n_e7, "Aplica=si + tiene hipoteca≠si"),
+    ("Aplican (sin hipoteca)",      n_e7, "Aplica=si + hipoteca confirmada NO"),
 ]
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
@@ -962,12 +969,13 @@ TRACCION_KILL = 0.20     # < 20% → KILL · 20–40% → ITERATE
 ELASTICIDAD_PP = 20      # ≥ 20pp accionable por umbral
 P_VALUE_SIG = 0.05       # significancia estadistica para z-test
 
-# Tracción pooled: % de leads con T&C que aplican. Usamos la columna Aplica
-# del Sheet directamente (el motor de riesgo ya considera score >= 720 y demás
-# reglas internas); no re-filtramos por hipoteca aquí porque el dato de
-# hipoteca solo existe para los entrevistados.
-n_tc = len(df_leads)
-n_aplican = int((df_leads["aplica"].astype(str).str.lower() == "si").sum())
+# Tracción pooled: % de leads con T&C que aplican. Usamos df_in (mismo
+# universo que el funnel, respeta los filtros del sidebar) para que las 3
+# secciones (Funnel, Decisión, Hipoteca) sean siempre congruentes.
+# n_aplica = pasaron score · n_aplica_sin_hip = score + hipoteca confirmada NO.
+n_tc = len(df_in)
+n_aplican = n_aplica
+n_aplican_final = n_aplica_sin_hip
 traccion = n_aplican / n_tc if n_tc > 0 else 0.0
 
 if traccion >= TRACCION_GO:
@@ -1072,11 +1080,24 @@ col_d1, col_d2 = st.columns(2)
 with col_d1:
     st.markdown(f"<h3 style='color:{DEEP};font-size:1rem;margin:8px 0 6px 0'>Tracción · cálculo</h3>", unsafe_allow_html=True)
     df_tr = pd.DataFrame({
-        "Métrica": ["Leads con T&C", "Aplican (Aplica=si)", "% Tracción"],
-        "Valor": [f"{n_tc}", f"{n_aplican}", f"{traccion*100:.1f}%"],
+        "Métrica": [
+            "Leads con T&C",
+            "Elegibles (Aplica=si)",
+            "Confirmados sin hipoteca",
+            "% Tracción",
+        ],
+        "Valor": [
+            f"{n_tc}",
+            f"{n_aplican}",
+            f"{n_aplican_final}",
+            f"{traccion*100:.1f}%",
+        ],
     })
     st.dataframe(df_tr, hide_index=True, use_container_width=True)
-    st.caption(f"Umbrales · ≥{TRACCION_GO*100:.0f}% GO · {TRACCION_KILL*100:.0f}–{TRACCION_GO*100:.0f}% ITERATE · <{TRACCION_KILL*100:.0f}% KILL")
+    st.caption(
+        f"Tracción usa Aplica=si / T&C (mismo numerador que el funnel etapa 6). "
+        f"Umbrales · ≥{TRACCION_GO*100:.0f}% GO · {TRACCION_KILL*100:.0f}–{TRACCION_GO*100:.0f}% ITERATE · <{TRACCION_KILL*100:.0f}% KILL"
+    )
 
 with col_d2:
     st.markdown(f"<h3 style='color:{DEEP};font-size:1rem;margin:8px 0 6px 0'>Elasticidad · AH vs BH</h3>", unsafe_allow_html=True)
