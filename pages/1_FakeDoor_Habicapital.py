@@ -237,9 +237,12 @@ else:
 # Merge con HubSpot SIN filtrar — queremos los metadatos para todos los leads.
 # El filtrado se aplica abajo sobre las columnas ya mergeadas.
 if not df_hs.empty and "deal_uuid" in df_hs.columns:
+    hs_cols = ["deal_uuid", "fuente", "ab_test_landing",
+               "estado_label", "oportunidad_del_negocio_label"]
+    if "negocio_aplica_para_bnpl" in df_hs.columns:
+        hs_cols.append("negocio_aplica_para_bnpl")
     df = df.merge(
-        df_hs[["deal_uuid", "fuente", "ab_test_landing",
-               "estado_label", "oportunidad_del_negocio_label"]].rename(
+        df_hs[hs_cols].rename(
             columns={"deal_uuid": "uuid_str", "ab_test_landing": "variante_hs"}
         ),
         on="uuid_str", how="left",
@@ -249,6 +252,7 @@ else:
     df["variante_hs"] = None
     df["estado_label"] = None
     df["oportunidad_del_negocio_label"] = None
+    df["negocio_aplica_para_bnpl"] = None
 
 # Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
 # pero leads sin match en HS solo se dropean cuando un filtro HS está activo.
@@ -275,9 +279,34 @@ entrevista_phones: set[str] = set()
 if not df_int.empty and "phone_norm" in df_int.columns:
     entrevista_phones = set(df_int["phone_norm"].dropna().astype(str))
 df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
-df_in["con_hipoteca"] = (
-    df_in["tiene hipoteca?"].fillna("").astype(str).str.strip().str.lower() == "si"
-)
+
+
+# Hipoteca: dos fuentes posibles, priorizando entrevista (cliente directo) sobre
+# HubSpot BNPL (regla de negocio). El producto requiere primera hipoteca como
+# garantía, así que "tiene hipoteca" == NO elegible para BNPL.
+#   - Entrevista "tiene hipoteca?" = si  → tiene hipoteca
+#   - Entrevista "tiene hipoteca?" = no  → sin hipoteca
+#   - HubSpot "negocio_aplica_para_bnpl" = no  → tiene hipoteca (regla de Habi)
+#   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
+#   - Sin ninguno de los dos → sin dato (toca llamar)
+def _hipoteca(row) -> tuple[str, str]:
+    e = str(row.get("tiene hipoteca?", "") or "").strip().lower().replace("í", "i")
+    if e == "si":
+        return "Sí", "Entrevista"
+    if e == "no":
+        return "No", "Entrevista"
+    b = str(row.get("negocio_aplica_para_bnpl", "") or "").strip().lower().replace("í", "i")
+    if b == "no":
+        return "Sí", "HubSpot BNPL"
+    if b == "si":
+        return "No", "HubSpot BNPL"
+    return "Sin dato", "Sin fuente"
+
+
+hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
+hip.columns = ["hipoteca_status", "hipoteca_fuente"]
+df_in = pd.concat([df_in, hip], axis=1)
+df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
 
 
 def _status(row) -> str:
@@ -701,6 +730,92 @@ else:
         else:
             st.write("% NaN por propiedad (100% = internal name probablemente está mal):")
             st.dataframe(empty.to_frame("% NaN"), use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hipoteca · doble fuente (Entrevista + HubSpot BNPL) sobre elegibles
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Hipoteca</h2>", unsafe_allow_html=True)
+
+elegibles_h = df_in[df_in["aplica"] == "si"].copy()
+n_elegibles_h = len(elegibles_h)
+
+if n_elegibles_h == 0:
+    st.info("Aún no hay elegibles para evaluar hipoteca.")
+else:
+    # Conteos cruzados status × fuente
+    cross = (
+        elegibles_h.groupby(["hipoteca_status", "hipoteca_fuente"])
+        .size().reset_index(name="N")
+    )
+    n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
+    n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
+    n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
+
+    st.caption(
+        f"{n_elegibles_h} elegibles · {n_si} tienen hipoteca · {n_no} sin hipoteca · "
+        f"{n_sd} sin contactar (call list de hipoteca). "
+        "Si hay dato en la entrevista, gana sobre la propiedad de HubSpot."
+    )
+
+    # Barra horizontal apilada: filas = status, stack por fuente
+    status_order = ["Sí", "No", "Sin dato"]
+    fuentes_order = ["Entrevista", "HubSpot BNPL", "Sin fuente"]
+    fuente_colors = {
+        "Entrevista":   PRIMARY,
+        "HubSpot BNPL": ACCENT,
+        "Sin fuente":   GREY,
+    }
+    pivot = (
+        cross.pivot(index="hipoteca_status", columns="hipoteca_fuente", values="N")
+        .reindex(status_order).fillna(0)
+    )
+    # asegurar todas las columnas de fuente existen
+    for f in fuentes_order:
+        if f not in pivot.columns:
+            pivot[f] = 0
+    pivot = pivot[fuentes_order]
+
+    fig_h = go.Figure()
+    for f in fuentes_order:
+        vals = pivot[f].astype(int).tolist()
+        fig_h.add_trace(go.Bar(
+            y=status_order, x=vals, orientation="h",
+            name=f, marker_color=fuente_colors[f],
+            text=[v if v > 0 else "" for v in vals],
+            textposition="inside", insidetextanchor="middle",
+            textfont=dict(color="#fff", size=12),
+            hovertemplate="<b>%{y}</b> · " + f + " · %{x}<extra></extra>",
+        ))
+    fig_h.update_layout(
+        barmode="stack",
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        height=260, margin=dict(l=10, r=20, t=10, b=10),
+        xaxis=dict(title="Elegibles", gridcolor="#ede8f5", tickformat=",d"),
+        yaxis=dict(autorange="reversed"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+    )
+    st.plotly_chart(fig_h, use_container_width=True)
+
+    # Tabla de detalle por elegible
+    cols_h = [c for c in [
+        "nombre_completo", "telefono", "cedula", "grupo",
+        "score", "hipoteca_status", "hipoteca_fuente",
+    ] if c in elegibles_h.columns]
+    detalle = (
+        elegibles_h[cols_h]
+        .sort_values(
+            by="hipoteca_status",
+            key=lambda s: s.map({"Sí": 0, "Sin dato": 1, "No": 2}).fillna(99),
+        )
+        .rename(columns={
+            "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
+            "grupo": "Grupo", "score": "Score",
+            "hipoteca_status": "Hipoteca", "hipoteca_fuente": "Fuente del dato",
+        })
+    )
+    st.dataframe(detalle, hide_index=True, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
