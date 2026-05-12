@@ -168,20 +168,16 @@ def _unique(series: pd.Series) -> list[str]:
     return sorted([s for s in series.dropna().astype(str).unique() if s])
 
 
-variantes_all = _unique(df_hs.get("ab_test_landing", pd.Series(dtype=str)))
+# Solo AH y BH — el experimento solo tiene esas dos variantes; A y B son valores
+# residuales de un test viejo que no aplica.
+variantes_all = ["AH", "BH"]
 estados_all = _unique(df_hs.get("estado_label", pd.Series(dtype=str)))
 oport_all = _unique(df_hs.get("oportunidad_del_negocio_label", pd.Series(dtype=str)))
 
 with st.sidebar:
-    # Botón de refresh manual — clear cache + rerun
-    if st.button("🔄 Actualizar datos", use_container_width=True,
-                  help="Limpia el cache de HubSpot/BigQuery/Sheets y vuelve a pegar los APIs"):
+    if st.button("Actualizar datos", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    st.caption(
-        "Cache: HubSpot/BigQuery se refrescan cada 24h; Sheets cada 2 min. "
-        "Usa el botón si necesitas datos al instante."
-    )
     st.markdown("---")
 
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
@@ -206,14 +202,13 @@ with st.sidebar:
     sel_estados = st.multiselect("estados", estados_all, default=estados_all, label_visibility="collapsed")
 
     st.markdown("---")
-    st.caption("Filtros aplican sobre el universo HubSpot y propagan al funnel, distribuciones y pipeline.")
 
 
-# Aplicar filtros
+# Aplicar filtros — siempre limita a AH/BH para excluir A/B/null residuales
 df_hs_f = df_hs.copy()
 if not df_hs_f.empty:
-    if len(sel_variantes) < len(variantes_all):
-        df_hs_f = df_hs_f[df_hs_f["ab_test_landing"].isin(sel_variantes) | df_hs_f["ab_test_landing"].isna()]
+    # Restricción de variante: solo AH/BH del experimento
+    df_hs_f = df_hs_f[df_hs_f["ab_test_landing"].isin(sel_variantes)]
     if len(sel_fuentes) < len(hs_src.FUENTES):
         df_hs_f = df_hs_f[df_hs_f["fuente"].isin(sel_fuentes)]
     if len(sel_oport) < len(oport_all):
@@ -327,15 +322,6 @@ c5.markdown(kpi_card("Elegibles", n_aplica, "score≥720"), unsafe_allow_html=Tr
 c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allow_html=True)
 
 
-with st.expander("Estado de los scores", expanded=False):
-    c1, c2 = st.columns(2)
-    c1.metric("Leads con score (Aplica lleno)", score_stats.get("filled", 0))
-    c2.metric("Leads sin score (Aplica vacío)", score_stats.get("empty", 0))
-    st.caption(
-        "El scoring lo dispara el fakedoor frontend al firmar T&C — escribe "
-        "directamente las columnas `Aplica` y `Metadata` del Sheet. El "
-        "dashboard solo lee, no consulta el API."
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,7 +404,8 @@ else:
     def _hbar(series: pd.Series, title: str, palette: tuple[str, str]):
         c = series.fillna("(sin valor)").astype(str).replace("", "(sin valor)").value_counts().reset_index()
         c.columns = ["cat", "N"]
-        c = c.sort_values("N", ascending=True)
+        # Top 10 categorias por frecuencia
+        c = c.head(10).sort_values("N", ascending=True)
         fig = go.Figure(go.Bar(
             x=c["N"], y=c["cat"], orientation="h",
             marker=dict(
@@ -520,10 +507,14 @@ else:
     u_vals = [s[1] for s in usab_stages]
     u_sources = [s[2] for s in usab_stages]
     u_colors = [DEEP, PRIMARY, MED, GREEN_DARK]
-    u_text = [
-        f"{v:,}  ({v/u_vals[i-1]*100:.0f}%)" if i > 0 and u_vals[i-1] > 0 else f"{v:,}"
-        for i, v in enumerate(u_vals)
-    ]
+    # No mostrar % cuando es > 100% (= tracking SPA limitado en flujo viejo)
+    u_text = []
+    for i, v in enumerate(u_vals):
+        if i == 0 or u_vals[i - 1] <= 0:
+            u_text.append(f"{v:,}")
+        else:
+            pct = v / u_vals[i - 1] * 100
+            u_text.append(f"{v:,}  ({pct:.0f}%)" if pct <= 100 else f"{v:,}")
     use_log_u = (max(u_vals) if u_vals else 0) > 100 and all(v > 0 for v in u_vals)
 
     fig_u = go.Figure(go.Bar(
@@ -657,14 +648,26 @@ st.markdown("<h2>Insights · entrevistas cualitativas</h2>", unsafe_allow_html=T
 if df_int.empty:
     st.info("La pestaña Entrevista está vacía.")
 else:
-    # Solo entrevistas de leads que APLICAN (aplica=si)
-    aplica_si_phones = set(df_in[df_in["aplica"] == "si"]["phone_norm"].dropna().astype(str))
-    df_int_f = df_int[df_int["phone_norm"].isin(aplica_si_phones)].copy()
+    # Solo entrevistas de leads ELEGIBLES (aplica=si)
+    elegibles = df_in[df_in["aplica"] == "si"]
+    elegibles_phones = set(elegibles["phone_norm"].dropna().astype(str))
+    df_int_f = df_int[df_int["phone_norm"].isin(elegibles_phones)].copy()
+
+    n_elegibles = len(elegibles)
+    n_elegibles_contactados = len(df_int_f)
+    n_elegibles_sin_contactar = n_elegibles - n_elegibles_contactados
+
+    if n_elegibles == 0:
+        st.info("Aún no hay elegibles.")
+    else:
+        st.caption(
+            f"{n_elegibles} elegibles totales · {n_elegibles_contactados} ya con entrevista · "
+            f"{n_elegibles_sin_contactar} aún sin contactar (call list activa)"
+        )
 
     if df_int_f.empty:
-        st.info("Ninguna entrevista corresponde a leads que aplican (aplica=si).")
+        st.info("Ninguno de los elegibles tiene entrevista aún.")
     else:
-        st.caption(f"Insights solo sobre los {len(df_int_f)} leads que aplican (de {len(df_int)} entrevistas totales)")
         col_pie, col_quote = st.columns([1, 2])
         with col_pie:
             hip_vals = df_int_f["tiene hipoteca?"].fillna("(sin dato)").astype(str).str.strip().str.lower()
