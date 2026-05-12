@@ -215,9 +215,12 @@ if not df_int.empty:
 else:
     df["tiene hipoteca?"] = None
 
-if not df_hs_f.empty and "deal_uuid" in df_hs_f.columns:
+# Merge con HubSpot SIN filtrar — queremos los metadatos para todos los leads.
+# El filtrado se aplica abajo sobre las columnas ya mergeadas.
+if not df_hs.empty and "deal_uuid" in df_hs.columns:
     df = df.merge(
-        df_hs_f[["deal_uuid", "fuente", "ab_test_landing"]].rename(
+        df_hs[["deal_uuid", "fuente", "ab_test_landing",
+               "estado_label", "oportunidad_del_negocio_label"]].rename(
             columns={"deal_uuid": "uuid_str", "ab_test_landing": "variante_hs"}
         ),
         on="uuid_str", how="left",
@@ -225,11 +228,26 @@ if not df_hs_f.empty and "deal_uuid" in df_hs_f.columns:
 else:
     df["fuente"] = None
     df["variante_hs"] = None
+    df["estado_label"] = None
+    df["oportunidad_del_negocio_label"] = None
 
-if allowed_uuids:
-    df_in = df[df["uuid_str"].isin(allowed_uuids)].copy()
-else:
-    df_in = df.copy()
+# Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
+# pero leads sin match en HS solo se dropean cuando un filtro HS está activo.
+def _applied(sel: list, all_opts: list) -> bool:
+    return bool(sel) and len(sel) < len(all_opts)
+
+df_in = df.copy()
+if _applied(sel_variantes, variantes_all):
+    df_in = df_in[
+        df_in["grupo"].astype(str).isin(sel_variantes)
+        | df_in["variante_hs"].astype(str).isin(sel_variantes)
+    ]
+if _applied(sel_fuentes, hs_src.FUENTES):
+    df_in = df_in[df_in["fuente"].isin(sel_fuentes)]
+if _applied(sel_oport, oport_all):
+    df_in = df_in[df_in["oportunidad_del_negocio_label"].isin(sel_oport)]
+if _applied(sel_estados, estados_all):
+    df_in = df_in[df_in["estado_label"].isin(sel_estados)]
 
 df_in["contactado"] = df_in["contesto?"].fillna("").astype(str).str.strip().ne("")
 df_in["con_hipoteca"] = (
@@ -522,7 +540,17 @@ styled = (
     .style.apply(lambda r: _row_color(r.name), axis=1)
 )
 st.dataframe(styled, hide_index=True, use_container_width=True)
-st.caption(f"{len(disp_sorted)} leads · ordenados por prioridad de llamada")
+
+n_total_sheet = len(df_leads)
+n_with_hs = int(df["fuente"].notna().sum())
+n_shown = len(disp_sorted)
+caption_parts = [f"{n_shown} leads mostrados · ordenados por prioridad de llamada"]
+if n_with_hs < n_total_sheet:
+    caption_parts.append(
+        f"⚠️ {n_total_sheet - n_with_hs} de {n_total_sheet} leads del Sheet "
+        f"no tienen deal con flag_fakedoor en HubSpot (no salen al filtrar por fuente/estado/oportunidad)"
+    )
+st.caption(" · ".join(caption_parts))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
