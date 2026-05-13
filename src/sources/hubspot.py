@@ -151,23 +151,29 @@ PREOFERTA_PROPS: dict[str, str] = {
     "pipeline":                         "Pipeline",
     "dealstage":                        "Etapa",
     "deal_uuid":                        "deal_uuid",
+    "nid":                              "nid",
     "contacto_digital":                 "Contacto Digital",
     "quiero_recibir_oferta_formal":     "Quiero recibir oferta formal",
     "tengo_preguntas":                  "Tengo preguntas",
     "error_preoferta":                  "Error pre-oferta",
     "phone":                            "Teléfono",
     "precio_maximo_prestamo":           "Precio máximo préstamo",
+    "hubspot_owner_id":                 "Propietario del negocio",
+    "categoria_comercial":              "Categoría comercial",
+    "prioridad_gestion_market_maker":   "Prioridad gestión MM",
 }
 
 
-def fetch_preoferta_deals(since_iso: str = "2026-05-07") -> pd.DataFrame:
-    """Trae deals MX del experimento EXP-003 Pre-Oferta Temprana.
+def fetch_preoferta_deals(
+    since_iso: str = "2026-05-07",
+    until_iso: str | None = None,
+    contacto_digital: str | None = "seller",
+) -> pd.DataFrame:
+    """Trae deals MX en el rango de fechas.
 
-    Filtros:
-      - createdate >= since_iso (default 7 mayo 2026, fecha lanzamiento)
-      - contacto_digital = "Seller" (canal del experimento)
-
-    Pagina 100 a la vez hasta agotar. snake_case columns.
+    Si `contacto_digital` se pasa, filtra por ese valor (default 'seller', el
+    canal del experimento). Pasa `None` para traer todos los canales (útil para
+    construir el control comparable).
     """
     properties = list(PREOFERTA_PROPS.keys())
     url = "https://api.hubapi.com/crm/v3/objects/deals/search"
@@ -176,9 +182,13 @@ def fetch_preoferta_deals(since_iso: str = "2026-05-07") -> pd.DataFrame:
     since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
     filters = [
         {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
-        {"propertyName": "contacto_digital", "operator": "EQ", "value": "seller"},
     ]
-    for _ in range(50):
+    if until_iso:
+        until_ms = int(datetime.fromisoformat(until_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        filters.append({"propertyName": "createdate", "operator": "LTE", "value": str(until_ms)})
+    if contacto_digital is not None:
+        filters.append({"propertyName": "contacto_digital", "operator": "EQ", "value": contacto_digital})
+    for _ in range(100):
         payload = {
             "filterGroups": [{"filters": filters}],
             "properties": properties,
@@ -201,7 +211,6 @@ def fetch_preoferta_deals(since_iso: str = "2026-05-07") -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=properties)
     if "createdate" in df.columns:
         df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
-    # Casting de contadores a int (vienen como strings de HubSpot)
     for col in ("quiero_recibir_oferta_formal", "tengo_preguntas", "error_preoferta"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)

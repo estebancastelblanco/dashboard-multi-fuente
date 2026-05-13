@@ -47,6 +47,60 @@ def _client() -> bigquery.Client:
     return bigquery.Client(project=project, credentials=creds)
 
 
+def fetch_nid_for_uuids(deal_uuids: list[str]) -> pd.DataFrame:
+    """Cruza deal_uuid (HubSpot API) → nid (BQ) usando sellers-main-prod.hubspot.deals."""
+    if not deal_uuids:
+        return pd.DataFrame(columns=["deal_uuid", "nid"])
+    uuids_str = ",".join(f'"{u}"' for u in deal_uuids[:5000])
+    sql = f"""
+        SELECT deal_uuid, nid
+        FROM `sellers-main-prod.hubspot.deals`
+        WHERE deal_uuid IN ({uuids_str})
+    """
+    return _client().query(sql).to_dataframe()
+
+
+def fetch_funnel_mex(
+    nids: list[int],
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> pd.DataFrame:
+    """Trae todas las filas del funnel MX para los nids dados.
+
+    `seguimiento_funnel_mex` es una tabla long: una fila por (nid, valor, fecha).
+    Devolvemos todas las filas con dedupe por (nid, valor) tomando la fecha más
+    temprana — así contar `valor='Cita Agendada (hubspot)'` da el set de leads
+    que llegaron al menos una vez a esa etapa.
+    """
+    if not nids:
+        return pd.DataFrame(columns=[
+            "nid", "valor", "fecha", "hubspot_owner_id", "categoria_comercial",
+            "prioridad_gestion_market_maker",
+        ])
+    # BQ array literal — limitar a 5000 nids por query para estar seguros
+    nid_list = ",".join(str(int(n)) for n in nids[:5000])
+    date_clauses = []
+    if date_from:
+        date_clauses.append(f"AND DATE(fecha) >= '{date_from}'")
+    if date_to:
+        date_clauses.append(f"AND DATE(fecha) <= '{date_to}'")
+    date_filter = "\n        ".join(date_clauses)
+    sql = f"""
+        SELECT
+          nid,
+          valor,
+          MIN(fecha) AS fecha,
+          ANY_VALUE(hubspot_owner_id) AS hubspot_owner_id,
+          ANY_VALUE(categoria_comercial) AS categoria_comercial,
+          ANY_VALUE(prioridad_gestion_market_maker) AS prioridad_gestion_market_maker
+        FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
+        WHERE nid IN ({nid_list})
+        {date_filter}
+        GROUP BY nid, valor
+    """
+    return _client().query(sql).to_dataframe()
+
+
 def fetch_top_inmuebles(limit: int = 10) -> pd.DataFrame:
     dataset_project = os.environ.get("BQ_DATASET_PROJECT", "papyrus-data-mx")
     dataset = os.environ.get("BQ_DATASET", "habi_wh_hesh")
