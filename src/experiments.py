@@ -40,18 +40,22 @@ REGISTRY: list[Experiment] = [
         },
     ),
     Experiment(
-        slug="demo-multi-fuente",
-        title="Demo · multi-fuente",
-        start_date="2026-05-12",
+        slug="preoferta-temprana",
+        title="Pre-Oferta",
+        start_date="2026-05-07",
         end_date=None,
-        design_doc_url=None,
+        design_doc_url="https://docs.google.com/document/d/1HBqhNVAopMoAyn0aN3TiOsNReG8aKfLPkgcinuFmPJM/edit",
         results_doc_url=None,
-        page="pages/2_Demo_multi_fuente.py",
+        page="pages/2_PreOferta.py",
         description=(
-            "Dashboard de demostración: 3 tablas en vivo (BigQuery, HubSpot, "
-            "Google Sheets) de máximo 10×4 cada una. Sirve como prueba de "
-            "conectividad."
+            "EXP-003 · Pre-Oferta Temprana (MX). Probar si revelar una pre-oferta "
+            "vía WhatsApp antes de la asignación mejora la CVR de asignado → cierre. "
+            "Split 95/5 sobre el flujo de seller en México."
         ),
         attachments=[],
+        funnel_baseline={
+            "wa_delivery_ratio": 0.80,
+            "landing_sheet_id": "1_EMQesd_n67wSqReYaTdJtSd3uvZsb7GXPRD6LyrJN4",
+        },
     ),
 ]

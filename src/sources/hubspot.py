@@ -141,6 +141,73 @@ def fetch_fakedoor_deals(since_iso: str | None = None) -> pd.DataFrame:
     return df
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EXP-003 · Pre-Oferta Temprana (MX)
+# ─────────────────────────────────────────────────────────────────────────────
+PREOFERTA_PROPS: dict[str, str] = {
+    "hs_object_id":                     "ID de registro",
+    "dealname":                         "Nombre del negocio",
+    "createdate":                       "Fecha de creación",
+    "pipeline":                         "Pipeline",
+    "dealstage":                        "Etapa",
+    "deal_uuid":                        "deal_uuid",
+    "contacto_digital":                 "Contacto Digital",
+    "quiero_recibir_oferta_formal":     "Quiero recibir oferta formal",
+    "tengo_preguntas":                  "Tengo preguntas",
+    "error_preoferta":                  "Error pre-oferta",
+    "phone":                            "Teléfono",
+    "precio_maximo_prestamo":           "Precio máximo préstamo",
+}
+
+
+def fetch_preoferta_deals(since_iso: str = "2026-05-07") -> pd.DataFrame:
+    """Trae deals MX del experimento EXP-003 Pre-Oferta Temprana.
+
+    Filtros:
+      - createdate >= since_iso (default 7 mayo 2026, fecha lanzamiento)
+      - contacto_digital = "Seller" (canal del experimento)
+
+    Pagina 100 a la vez hasta agotar. snake_case columns.
+    """
+    properties = list(PREOFERTA_PROPS.keys())
+    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    rows: list[dict] = []
+    after: str | None = None
+    since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    filters = [
+        {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
+        {"propertyName": "contacto_digital", "operator": "EQ", "value": "seller"},
+    ]
+    for _ in range(50):
+        payload = {
+            "filterGroups": [{"filters": filters}],
+            "properties": properties,
+            "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        for deal in body.get("results", []):
+            props = deal.get("properties", {})
+            rows.append({k: props.get(k) for k in properties})
+        paging = body.get("paging", {}).get("next")
+        if not paging:
+            break
+        after = paging.get("after")
+
+    df = pd.DataFrame(rows, columns=properties)
+    if "createdate" in df.columns:
+        df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
+    # Casting de contadores a int (vienen como strings de HubSpot)
+    for col in ("quiero_recibir_oferta_formal", "tengo_preguntas", "error_preoferta"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+    return df
+
+
 def list_deal_properties() -> pd.DataFrame:
     """Devuelve todas las propiedades del objeto deal (para descubrir internal names)."""
     url = "https://api.hubapi.com/crm/v3/properties/deals"
