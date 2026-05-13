@@ -137,6 +137,44 @@ def load_funnel_mex(nids: tuple[int, ...], date_from: str, date_to: str) -> pd.D
     return bq_src.fetch_funnel_mex(list(nids), date_from=date_from, date_to=date_to)
 
 
+@st.cache_data(ttl=SHORT, show_spinner=False)
+def enrich_deals_df(
+    df: pd.DataFrame,
+    owner_email_map: dict[str, str],
+    opened_uuids: frozenset[str],
+    juan_email: str,
+) -> pd.DataFrame:
+    """Calcula columnas derivadas pesadas (interacción, asignación, abrió link)
+    una sola vez por (df, mapas) y las cachea en memoria. Evita reprocesar
+    269+ filas con apply en cada rerun.
+    """
+    df = df.copy()
+    df["interaccion"] = df.apply(_interaccion, axis=1)
+    df["owner_email"] = df["hubspot_owner_id"].astype(str).map(owner_email_map).fillna("")
+    df["asignado"] = (
+        df["hubspot_owner_id"].notna()
+        & (df["owner_email"].astype(str).str.lower() != juan_email)
+        & df["prioridad_gestion_market_maker"].fillna("").astype(str).str.strip().ne("")
+    )
+    df["asignacion_label"] = df["asignado"].map({True: "Asignado", False: "No asignado"})
+    df["abrió_link"] = df["deal_uuid"].astype(str).str.lower().isin(opened_uuids)
+    df["owner_label"] = df["hubspot_owner_id"].astype(str).map(
+        lambda oid: owner_email_map.get(oid, oid) if oid and oid != "nan" else "(sin owner)"
+    )
+    return df
+
+
+def _interaccion(row) -> str:
+    """Jerarquía CTA: quiero oferta > preguntas > error > sin interacción."""
+    if int(row.get("quiero_recibir_oferta_formal", 0) or 0) > 0:
+        return "Quiero oferta"
+    if int(row.get("tengo_preguntas", 0) or 0) > 0:
+        return "Tengo preguntas"
+    if int(row.get("error_preoferta", 0) or 0) > 0:
+        return "Error"
+    return "Sin interacción"
+
+
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · catálogo owners…", persist="disk")
 def load_owner_emails(owner_ids: tuple[str, ...]) -> dict[str, str]:
     """owner_id → email. Solo lo que usamos para detectar Juan Quiñones."""
@@ -272,32 +310,14 @@ except Exception as exc:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Derivados: interacción jerárquica, asignación, abrió link
+# Derivados: cacheados en memoria con enrich_deals_df
 # ─────────────────────────────────────────────────────────────────────────────
-def _interaccion(row) -> str:
-    if int(row.get("quiero_recibir_oferta_formal", 0) or 0) > 0:
-        return "Quiero oferta"
-    if int(row.get("tengo_preguntas", 0) or 0) > 0:
-        return "Tengo preguntas"
-    if int(row.get("error_preoferta", 0) or 0) > 0:
-        return "Error"
-    return "Sin interacción"
-
-
-df_t["interaccion"] = df_t.apply(_interaccion, axis=1)
-df_t["owner_email"] = df_t["hubspot_owner_id"].astype(str).map(owner_email_map).fillna("")
-df_t["asignado"] = (
-    df_t["hubspot_owner_id"].notna()
-    & (df_t["owner_email"].astype(str).str.lower() != JUAN_OWNER_EMAIL)
-    & df_t["prioridad_gestion_market_maker"].fillna("").astype(str).str.strip().ne("")
-)
-df_t["asignacion_label"] = df_t["asignado"].map({True: "Asignado", False: "No asignado"})
-
-# abrió link
-opened_uuids: set[str] = set()
+opened_uuids_set: frozenset[str] = frozenset()
 if not df_logs.empty and "uuid" in df_logs.columns:
-    opened_uuids = set(df_logs["uuid"].dropna().astype(str).str.lower())
-df_t["abrió_link"] = df_t["deal_uuid"].astype(str).str.lower().isin(opened_uuids)
+    opened_uuids_set = frozenset(df_logs["uuid"].dropna().astype(str).str.lower())
+
+df_t = enrich_deals_df(df_t, owner_email_map, opened_uuids_set, JUAN_OWNER_EMAIL)
+opened_uuids = set(opened_uuids_set)
 
 
 # Aplicar filtros del sidebar al tratamiento
@@ -575,11 +595,7 @@ with col_estado:
         )
 
 with col_owner:
-    # Mapear owner_id → email para legibilidad
-    df_t_f["owner_label"] = df_t_f.apply(
-        lambda r: owner_email_map.get(str(r.get("hubspot_owner_id", "") or ""), r.get("hubspot_owner_id") or "(sin owner)"),
-        axis=1,
-    )
+    # owner_label ya viene cacheado desde enrich_deals_df
     st.plotly_chart(
         _hbar(df_t_f["owner_label"], "Comerciales (top 10)", PALE, ACCENT),
         use_container_width=True,

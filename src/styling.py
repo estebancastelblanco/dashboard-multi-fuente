@@ -35,6 +35,15 @@ def inject_base_css() -> None:
       [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] {{
         background:#fff;
       }}
+      /* date_input dentro del sidebar: fondo blanco + texto oscuro para contraste */
+      [data-testid="stSidebar"] [data-testid="stDateInput"] input,
+      [data-testid="stSidebar"] [data-baseweb="input"] input {{
+        color: {DEEP} !important;
+        background: #fff !important;
+      }}
+      [data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] {{
+        background: #fff !important;
+      }}
       [data-testid="stSidebar"] .stMarkdown h3 {{
         color:{LIGHT} !important;
         font-size:0.78rem !important;
