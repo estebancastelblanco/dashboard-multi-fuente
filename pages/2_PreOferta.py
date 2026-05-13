@@ -30,10 +30,17 @@ def _bootstrap_from_st_secrets() -> None:
 
 _bootstrap_from_st_secrets()
 
+import importlib
 from src.experiments import REGISTRY
 from src.sources import bigquery as bq_src
 from src.sources import gsheets as gs_src
 from src.sources import hubspot as hs_src
+
+# Streamlit Cloud retiene sys.modules entre reruns; tras un deploy con cambios
+# en src/sources, fuerza una recarga para que las nuevas firmas se vean.
+hs_src = importlib.reload(hs_src)
+bq_src = importlib.reload(bq_src)
+gs_src = importlib.reload(gs_src)
 from src.styling import (
     inject_base_css, kpi_card,
     DEEP, PRIMARY, MED, ACCENT, LIGHT, PALE, WHITE,
