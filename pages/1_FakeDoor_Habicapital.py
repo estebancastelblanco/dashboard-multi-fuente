@@ -796,7 +796,7 @@ else:
             credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
             credit_join = credit_join.sort_values(
                 ["producto", "linea_negocio", "score_crediticio"],
-                ascending=[True, False],
+                ascending=[True, True, False],
             )
 
             if credit_join.empty:
