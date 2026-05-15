@@ -5,6 +5,7 @@ import os
 import re
 from datetime import datetime
 from math import ceil, erf, sqrt
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
@@ -58,6 +59,8 @@ st.markdown(
 
 
 UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXPERIAN_CSV_PATH = REPO_ROOT / "data" / "experian_check_executions_2026-05-15.csv"
 
 
 def _norm_phone(s: object) -> str:
@@ -143,6 +146,10 @@ def _safe_str(value: object) -> str:
     return "" if pd.isna(value) else str(value).strip()
 
 
+def _norm_doc_id(value: object) -> str:
+    return re.sub(r"\D", "", _safe_str(value))
+
+
 # Overrides manuales para casos ya verificados por operación.
 # Clave: teléfono normalizado (últimos 10 dígitos).
 HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -226,6 +233,37 @@ def load_client_categories(nids: tuple[int, ...]) -> pd.DataFrame:
     return bq_src.fetch_fakedoor_client_categories(list(nids))
 
 
+@st.cache_data(ttl=DAY, show_spinner="CSV · scores Experian…", persist="disk")
+def load_experian_scores() -> pd.DataFrame:
+    if not EXPERIAN_CSV_PATH.exists():
+        return pd.DataFrame(columns=["document_id_norm", "score_crediticio", "execution_date"])
+    df = pd.read_csv(
+        EXPERIAN_CSV_PATH,
+        usecols=["document_id", "experian_response.score", "execution_date"],
+        dtype={"document_id": str},
+    )
+    df["document_id_norm"] = df["document_id"].apply(_norm_doc_id)
+    df["score_crediticio"] = pd.to_numeric(df["experian_response.score"], errors="coerce")
+    df["execution_date"] = pd.to_datetime(df["execution_date"], errors="coerce")
+    df = df.dropna(subset=["document_id_norm", "score_crediticio"]).copy()
+    df = df.sort_values("execution_date").drop_duplicates("document_id_norm", keep="last")
+    return df[["document_id_norm", "score_crediticio", "execution_date"]]
+
+
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · desglose crediticio sellers…", persist="disk")
+def load_sellers_credit_breakdown(nids: tuple[int, ...]) -> pd.DataFrame:
+    return bq_src.fetch_sellers_credit_breakdown(list(nids))
+
+
+@st.cache_data(ttl=DAY, show_spinner="HubSpot · deals 2026…", persist="disk")
+def load_hs_deals_2026() -> pd.DataFrame:
+    return hs_src.fetch_deals_created_range(
+        "2026-01-01",
+        "2026-12-31T23:59:59",
+        properties=["nid", "createdate"],
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Carga base
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,6 +287,7 @@ except Exception as exc:
     st.warning(f"HubSpot no disponible: {type(exc).__name__}: {exc}")
 
 df_bq = load_landing_events()
+df_experian = load_experian_scores()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -687,6 +726,150 @@ fig_funnel.update_layout(
     yaxis=dict(autorange="reversed"),
 )
 st.plotly_chart(fig_funnel, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Desglose crediticio sellers
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Desgloce crediticio sellers</h2>", unsafe_allow_html=True)
+
+if df_experian.empty:
+    st.info("No se encontró el CSV de Experian con scores crediticios.")
+else:
+    nids_credito = tuple(sorted(df_hs_f["nid"].dropna().astype(int).unique().tolist())) if not df_hs_f.empty else tuple()
+    if not nids_credito:
+        st.info("No hay `nid` disponibles en el filtro actual para cruzar el desglose crediticio.")
+    else:
+        try:
+            df_credit = load_sellers_credit_breakdown(nids_credito)
+        except Exception as exc:
+            df_credit = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
+            st.warning(f"BigQuery desglose crediticio: {type(exc).__name__}: {exc}")
+
+        if df_credit.empty:
+            st.info("No hubo cruce crediticio para los `nid` filtrados.")
+        else:
+            df_credit["cedula_norm"] = df_credit["cedula_cliente"].apply(_norm_doc_id)
+            credit_join = df_credit.merge(
+                df_experian,
+                left_on="cedula_norm",
+                right_on="document_id_norm",
+                how="left",
+            )
+            credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
+            credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
+            credit_join = credit_join.sort_values(
+                ["linea_negocio", "score_crediticio"],
+                ascending=[True, False],
+            )
+
+            if credit_join.empty:
+                st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
+            else:
+                st.dataframe(
+                    credit_join[["nid", "linea_negocio", "cedula_cliente", "score_crediticio"]]
+                    .rename(columns={
+                        "nid": "NID",
+                        "linea_negocio": "Línea de negocio",
+                        "cedula_cliente": "Cédula",
+                        "score_crediticio": "Score crediticio",
+                    }),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                fig_credit = go.Figure()
+                for linea, sub in credit_join.groupby("linea_negocio"):
+                    fig_credit.add_trace(go.Box(
+                        x=sub["linea_negocio"],
+                        y=sub["score_crediticio"],
+                        name=str(linea),
+                        boxpoints="all",
+                        jitter=0.25,
+                        pointpos=0,
+                        marker_color=PRIMARY,
+                        line_color=DEEP,
+                        showlegend=False,
+                    ))
+                fig_credit.update_layout(
+                    paper_bgcolor=WHITE,
+                    plot_bgcolor=WHITE,
+                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                    title=dict(text="Distribución de score por línea de negocio", font=dict(size=13, color=DEEP)),
+                    height=360,
+                    margin=dict(l=10, r=10, t=44, b=10),
+                    xaxis=dict(title="Línea de negocio", gridcolor="#ede8f5"),
+                    yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                )
+                st.plotly_chart(fig_credit, use_container_width=True)
+
+    try:
+        df_hs_2026 = load_hs_deals_2026()
+    except Exception as exc:
+        df_hs_2026 = pd.DataFrame(columns=["nid", "createdate"])
+        st.warning(f"HubSpot deals 2026: {type(exc).__name__}: {exc}")
+
+    nids_2026 = tuple(sorted(pd.to_numeric(df_hs_2026.get("nid", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).unique().tolist()))
+    if nids_2026:
+        try:
+            df_credit_2026 = load_sellers_credit_breakdown(nids_2026)
+        except Exception as exc:
+            df_credit_2026 = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
+            st.warning(f"BigQuery desglose crediticio 2026: {type(exc).__name__}: {exc}")
+
+        if not df_credit_2026.empty:
+            df_credit_2026["cedula_norm"] = df_credit_2026["cedula_cliente"].apply(_norm_doc_id)
+            scores_2026 = df_credit_2026.merge(
+                df_experian,
+                left_on="cedula_norm",
+                right_on="document_id_norm",
+                how="left",
+            )
+            scores_2026 = scores_2026.dropna(subset=["score_crediticio"]).copy()
+            if not scores_2026.empty:
+                scores_2026["score_crediticio"] = pd.to_numeric(scores_2026["score_crediticio"], errors="coerce")
+                ranked = scores_2026["score_crediticio"].rank(method="first")
+                n_bins = min(10, max(1, len(scores_2026)))
+                decil_labels = [f"D{i}" for i in range(1, n_bins + 1)]
+                scores_2026["decil"] = pd.qcut(
+                    ranked,
+                    n_bins,
+                    labels=decil_labels,
+                )
+                pivot = (
+                    scores_2026.groupby(["decil", "linea_negocio"])
+                    .size()
+                    .unstack(fill_value=0)
+                    .reindex(decil_labels)
+                )
+                st.markdown(
+                    f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                    f"Scores 2026 por deciles y producto</h3>",
+                    unsafe_allow_html=True,
+                )
+                fig_heat = go.Figure(go.Heatmap(
+                    z=pivot.values,
+                    x=list(pivot.columns),
+                    y=list(pivot.index),
+                    colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
+                    showscale=False,
+                    hovertemplate="<b>%{x}</b><br>%{y}: %{z} scores<extra></extra>",
+                ))
+                fig_heat.update_layout(
+                    paper_bgcolor=WHITE,
+                    plot_bgcolor=WHITE,
+                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                    height=max(340, len(pivot.index) * 28 + 80),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(title="Producto / línea de negocio", side="bottom"),
+                    yaxis=dict(title="Decil"),
+                )
+                st.plotly_chart(fig_heat, use_container_width=True)
+                st.dataframe(
+                    pivot.reset_index().rename(columns={"decil": "Decil"}),
+                    hide_index=True,
+                    use_container_width=True,
+                )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

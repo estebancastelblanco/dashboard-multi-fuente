@@ -144,6 +144,50 @@ def fetch_fakedoor_deals(since_iso: str | None = None) -> pd.DataFrame:
     return df
 
 
+def fetch_deals_created_range(
+    since_iso: str,
+    until_iso: str | None = None,
+    *,
+    properties: list[str] | None = None,
+) -> pd.DataFrame:
+    """Trae deals creados en un rango sin aplicar filtros adicionales."""
+    props = properties or ["nid", "createdate"]
+    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    rows: list[dict] = []
+    after: str | None = None
+    since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    filters = [
+        {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
+    ]
+    if until_iso:
+        until_ms = int(datetime.fromisoformat(until_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        filters.append({"propertyName": "createdate", "operator": "LTE", "value": str(until_ms)})
+    for _ in range(300):
+        payload = {
+            "filterGroups": [{"filters": filters}],
+            "properties": props,
+            "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        for deal in body.get("results", []):
+            prop_values = deal.get("properties", {})
+            rows.append({k: prop_values.get(k) for k in props})
+        paging = body.get("paging", {}).get("next")
+        if not paging:
+            break
+        after = paging.get("after")
+
+    df = pd.DataFrame(rows, columns=props)
+    if "createdate" in df.columns:
+        df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
+    return df
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EXP-003 · Pre-Oferta Temprana (MX)
 # ─────────────────────────────────────────────────────────────────────────────

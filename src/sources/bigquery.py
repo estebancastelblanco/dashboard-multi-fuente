@@ -183,3 +183,35 @@ def fetch_fakedoor_client_categories(nids: list[int]) -> pd.DataFrame:
           AND nid IN ({nid_list})
     """
     return _client().query(sql).to_dataframe()
+
+
+def fetch_sellers_credit_breakdown(nids: list[int] | None = None) -> pd.DataFrame:
+    """Trae nid, línea de negocio y cédula para sellers."""
+    base_sql = """
+        SELECT DISTINCT
+          d.nid,
+          bl.name AS linea_negocio,
+          p.document_id AS cedula_cliente
+        FROM `sellers-main-prod.commercial_legal_co.deal` d
+        LEFT JOIN `sellers-main-prod.commercial_legal_co.deal_person` dp
+          ON dp.deal_id = d.id
+        LEFT JOIN `sellers-main-prod.commercial_legal_co.person` p
+          ON p.id = dp.person_id
+        LEFT JOIN `sellers-main-prod.commercial_legal_co.business_line` bl
+          ON bl.id = d.business_line_id
+        WHERE d.nid IS NOT NULL
+          AND p.document_id IS NOT NULL
+          AND bl.name IS NOT NULL
+    """
+    if not nids:
+        return _client().query(base_sql).to_dataframe()
+
+    frames: list[pd.DataFrame] = []
+    for i in range(0, len(nids), 5000):
+        chunk = nids[i:i + 5000]
+        nid_list = ",".join(str(int(n)) for n in chunk)
+        sql = base_sql + f"\n  AND d.nid IN ({nid_list})"
+        frames.append(_client().query(sql).to_dataframe())
+    if not frames:
+        return pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
+    return pd.concat(frames, ignore_index=True).drop_duplicates()
