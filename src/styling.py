@@ -22,7 +22,42 @@ RED         = "#EF5350"   # error
 def inject_base_css() -> None:
     st.markdown(f"""
     <style>
-      html, body, [data-testid="stAppViewContainer"] {{ background:{BG}; }}
+      :root {{
+        color-scheme: light !important;
+      }}
+      html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp {{
+        background:{BG} !important;
+        color:{DEEP} !important;
+      }}
+      [data-testid="stHeader"] {{
+        background:{BG} !important;
+      }}
+      [data-testid="stToolbar"] {{
+        background:transparent !important;
+      }}
+      [data-testid="stMainBlockContainer"],
+      [data-testid="stVerticalBlock"],
+      [data-testid="stHorizontalBlock"],
+      [data-testid="stMarkdownContainer"],
+      [data-testid="stDataFrame"],
+      [data-testid="stTable"] {{
+        color:{DEEP} !important;
+      }}
+      [data-baseweb="select"] > div,
+      [data-baseweb="input"] > div,
+      .stTextInput input,
+      .stNumberInput input,
+      .stDateInput input,
+      .stTextArea textarea,
+      .stMultiSelect [data-baseweb="select"],
+      .stSelectbox [data-baseweb="select"] {{
+        background:{WHITE} !important;
+        color:{DEEP} !important;
+      }}
+      [data-testid="stDataFrame"] div,
+      [data-testid="stTable"] div {{
+        color:{DEEP} !important;
+      }}
       [data-testid="stSidebar"] {{ background:{DEEP}; border-right: 1px solid {MED}; }}
       [data-testid="stSidebar"] *, [data-testid="stSidebar"] label {{ color:{PALE} !important; }}
       [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] {{
