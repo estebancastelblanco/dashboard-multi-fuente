@@ -299,6 +299,19 @@ def load_experian_scores() -> pd.DataFrame:
     return df[["document_id_norm", "score_crediticio", "execution_date"]]
 
 
+@st.cache_data(ttl=DAY, show_spinner="CSV · auditoría Experian…", persist="disk")
+def load_experian_csv_stats() -> tuple[int, int]:
+    if not EXPERIAN_CSV_PATH.exists():
+        return 0, 0
+    raw = pd.read_csv(
+        EXPERIAN_CSV_PATH,
+        usecols=["document_id"],
+        dtype={"document_id": str},
+    )
+    raw["document_id_norm"] = raw["document_id"].apply(_norm_doc_id)
+    return len(raw), int(raw["document_id_norm"].replace("", pd.NA).dropna().nunique())
+
+
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · desglose crediticio sellers…", persist="disk")
 def load_sellers_credit_breakdown(nids: tuple[int, ...]) -> pd.DataFrame:
     return bq_src.fetch_sellers_credit_breakdown(list(nids))
@@ -337,6 +350,7 @@ except Exception as exc:
 
 df_bq = load_landing_events()
 df_experian = load_experian_scores()
+experian_rows_raw, experian_docs_raw = load_experian_csv_stats()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -802,13 +816,13 @@ else:
         st.info("No hubo datos crediticios en BigQuery para construir el cruce.")
     else:
         df_credit["cedula_norm"] = df_credit["cedula_cliente"].apply(_norm_doc_id)
-        credit_join = df_credit.merge(
+        credit_join_all = df_credit.merge(
             df_experian,
             left_on="cedula_norm",
             right_on="document_id_norm",
             how="left",
         )
-        credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
+        credit_join = credit_join_all.dropna(subset=["score_crediticio"]).copy()
         credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
         credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
         credit_join = credit_join[credit_join["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])].copy()
@@ -820,6 +834,32 @@ else:
         if credit_join.empty:
             st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
         else:
+            bq_rows = len(df_credit)
+            bq_docs = int(df_credit["cedula_norm"].replace("", pd.NA).dropna().nunique())
+            matched_rows = len(credit_join_all.dropna(subset=["score_crediticio"]))
+            matched_docs = int(
+                credit_join_all.dropna(subset=["score_crediticio"])["cedula_norm"]
+                .replace("", pd.NA)
+                .dropna()
+                .nunique()
+            )
+            final_nids = int(credit_join["nid"].nunique())
+            final_rows = len(credit_join)
+
+            audit_cols = st.columns(6)
+            audit_cols[0].markdown(kpi_card("CSV filas", experian_rows_raw, "Experian raw"), unsafe_allow_html=True)
+            audit_cols[1].markdown(kpi_card("CSV cédulas", experian_docs_raw, "document_id únicos"), unsafe_allow_html=True)
+            audit_cols[2].markdown(kpi_card("BQ filas", bq_rows, "query sellers"), unsafe_allow_html=True)
+            audit_cols[3].markdown(kpi_card("BQ cédulas", bq_docs, "cédulas únicas"), unsafe_allow_html=True)
+            audit_cols[4].markdown(kpi_card("Cruce docs", matched_docs, f"{matched_rows} filas con score"), unsafe_allow_html=True)
+            audit_cols[5].markdown(kpi_card("NIDs finales", final_nids, f"{final_rows} filas en 3 productos"), unsafe_allow_html=True)
+
+            st.caption(
+                "La diferencia de volumen viene de cuatro pasos: el CSV trae múltiples corridas por cédula, "
+                "la carga conserva una sola por documento, luego solo sobreviven los documentos presentes en BigQuery, "
+                "y al final el tablero muestra NID únicos dentro de iBuyer, Alianza e Inmobiliaria."
+            )
+
             counts_linea = (
                 credit_join.groupby("producto")["nid"]
                 .nunique()
