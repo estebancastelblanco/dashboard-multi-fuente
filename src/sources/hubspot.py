@@ -150,7 +150,12 @@ def fetch_deals_created_range(
     *,
     properties: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Trae deals creados en un rango sin aplicar filtros adicionales."""
+    """Trae deals creados desde una fecha y corta el rango final localmente.
+
+    HubSpot Search ha sido inestable con filtros dobles de createdate en este
+    entorno. Para evitar errores 400, se consulta solo con `GTE` y luego se
+    aplica el `until_iso` en memoria.
+    """
     props = properties or ["nid", "createdate"]
     url = "https://api.hubapi.com/crm/v3/objects/deals/search"
     rows: list[dict] = []
@@ -159,9 +164,6 @@ def fetch_deals_created_range(
     filters = [
         {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
     ]
-    if until_iso:
-        until_ms = int(datetime.fromisoformat(until_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
-        filters.append({"propertyName": "createdate", "operator": "LTE", "value": str(until_ms)})
     for _ in range(300):
         payload = {
             "filterGroups": [{"filters": filters}],
@@ -185,6 +187,11 @@ def fetch_deals_created_range(
     df = pd.DataFrame(rows, columns=props)
     if "createdate" in df.columns:
         df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
+        if until_iso:
+            until_dt = pd.to_datetime(until_iso, errors="coerce", utc=True)
+            if pd.notna(until_dt):
+                created_utc = pd.to_datetime(df["createdate"], errors="coerce", utc=True)
+                df = df[created_utc <= until_dt].copy()
     return df
 
 

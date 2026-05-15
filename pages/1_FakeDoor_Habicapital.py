@@ -160,6 +160,24 @@ def _norm_doc_id(value: object) -> str:
     return re.sub(r"\D", "", _safe_str(value))
 
 
+def _product_bucket(value: object) -> str:
+    text = _norm_text(value)
+    if text in {"buyer", "ibuyer", "i buyer"}:
+        return "iBuyer"
+    if text in {"inmobiliaria"}:
+        return "Inmobiliaria"
+    if text in {
+        "alianza 1",
+        "alianza 2",
+        "alianza",
+        "captacion automatica",
+        "captacion automática",
+        "taas",
+    }:
+        return "Alianza"
+    return _safe_str(value) or "Sin categoría"
+
+
 # Overrides manuales para casos ya verificados por operación.
 # Clave: teléfono normalizado (últimos 10 dígitos).
 HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -575,7 +593,7 @@ def _score_sort_key(idx: int) -> tuple[int, float]:
     return priority, -score_val
 
 remaining_idx = sorted(remaining_idx, key=_score_sort_key)
-target_yes_contact = min(3, len(remaining_idx))
+target_yes_contact = min(4, len(remaining_idx))
 yes_contact_idx = set(remaining_idx[:target_yes_contact])
 for idx in remaining_idx:
     if idx in yes_contact_idx:
@@ -775,18 +793,33 @@ else:
             )
             credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
             credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
+            credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
             credit_join = credit_join.sort_values(
-                ["linea_negocio", "score_crediticio"],
+                ["producto", "linea_negocio", "score_crediticio"],
                 ascending=[True, False],
             )
 
             if credit_join.empty:
                 st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
             else:
+                counts_linea = (
+                    credit_join.groupby("producto")["nid"]
+                    .nunique()
+                    .reset_index(name="Total")
+                    .sort_values("producto")
+                )
+                c_counts = st.columns(max(1, len(counts_linea)))
+                for col, row in zip(c_counts, counts_linea.itertuples(index=False)):
+                    col.markdown(
+                        kpi_card(row.producto, int(row.Total), "nids con score cruzado"),
+                        unsafe_allow_html=True,
+                    )
+
                 st.dataframe(
-                    credit_join[["nid", "linea_negocio", "cedula_cliente", "score_crediticio"]]
+                    credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
                     .rename(columns={
                         "nid": "NID",
+                        "producto": "Producto",
                         "linea_negocio": "Línea de negocio",
                         "cedula_cliente": "Cédula",
                         "score_crediticio": "Score crediticio",
@@ -796,11 +829,11 @@ else:
                 )
 
                 fig_credit = go.Figure()
-                for linea, sub in credit_join.groupby("linea_negocio"):
+                for producto, sub in credit_join.groupby("producto"):
                     fig_credit.add_trace(go.Box(
-                        x=sub["linea_negocio"],
+                        x=sub["producto"],
                         y=sub["score_crediticio"],
-                        name=str(linea),
+                        name=str(producto),
                         boxpoints="all",
                         jitter=0.25,
                         pointpos=0,
@@ -812,10 +845,10 @@ else:
                     paper_bgcolor=WHITE,
                     plot_bgcolor=WHITE,
                     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                    title=dict(text="Distribución de score por línea de negocio", font=dict(size=13, color=DEEP)),
+                    title=dict(text="Distribución de score por producto", font=dict(size=13, color=DEEP)),
                     height=360,
                     margin=dict(l=10, r=10, t=44, b=10),
-                    xaxis=dict(title="Línea de negocio", gridcolor="#ede8f5"),
+                    xaxis=dict(title="Producto", gridcolor="#ede8f5"),
                     yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
                 )
                 st.plotly_chart(fig_credit, use_container_width=True)
@@ -845,6 +878,8 @@ else:
             scores_2026 = scores_2026.dropna(subset=["score_crediticio"]).copy()
             if not scores_2026.empty:
                 scores_2026["score_crediticio"] = pd.to_numeric(scores_2026["score_crediticio"], errors="coerce")
+                scores_2026["producto"] = scores_2026["linea_negocio"].apply(_product_bucket)
+                scores_2026 = scores_2026[scores_2026["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])].copy()
                 ranked = scores_2026["score_crediticio"].rank(method="first")
                 n_bins = min(10, max(1, len(scores_2026)))
                 decil_labels = [f"D{i}" for i in range(1, n_bins + 1)]
@@ -853,40 +888,59 @@ else:
                     n_bins,
                     labels=decil_labels,
                 )
-                pivot = (
-                    scores_2026.groupby(["decil", "linea_negocio"])
-                    .size()
-                    .unstack(fill_value=0)
-                    .reindex(decil_labels)
-                )
                 st.markdown(
                     f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
                     f"Scores 2026 por deciles y producto</h3>",
                     unsafe_allow_html=True,
                 )
-                fig_heat = go.Figure(go.Heatmap(
-                    z=pivot.values,
-                    x=list(pivot.columns),
-                    y=list(pivot.index),
-                    colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
-                    showscale=False,
-                    hovertemplate="<b>%{x}</b><br>%{y}: %{z} scores<extra></extra>",
-                ))
-                fig_heat.update_layout(
-                    paper_bgcolor=WHITE,
-                    plot_bgcolor=WHITE,
-                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                    height=max(340, len(pivot.index) * 28 + 80),
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    xaxis=dict(title="Producto / línea de negocio", side="bottom"),
-                    yaxis=dict(title="Decil"),
-                )
-                st.plotly_chart(fig_heat, use_container_width=True)
-                st.dataframe(
-                    pivot.reset_index().rename(columns={"decil": "Decil"}),
-                    hide_index=True,
-                    use_container_width=True,
-                )
+                product_order = ["iBuyer", "Alianza", "Inmobiliaria"]
+                chart_cols = st.columns(3)
+                pivot_frames: list[pd.DataFrame] = []
+                for col, producto in zip(chart_cols, product_order):
+                    sub = scores_2026[scores_2026["producto"] == producto].copy()
+                    if sub.empty:
+                        with col:
+                            st.info(f"Sin scores 2026 para {producto}.")
+                        continue
+                    sub_ranked = sub["score_crediticio"].rank(method="first")
+                    sub_bins = min(10, max(1, len(sub)))
+                    sub_labels = [f"D{i}" for i in range(1, sub_bins + 1)]
+                    sub["decil"] = pd.qcut(sub_ranked, sub_bins, labels=sub_labels)
+                    pivot_sub = (
+                        sub.groupby("decil")
+                        .size()
+                        .reindex(sub_labels, fill_value=0)
+                        .reset_index(name="N")
+                    )
+                    pivot_sub["Producto"] = producto
+                    pivot_frames.append(pivot_sub.copy())
+                    fig_sub = go.Figure(go.Bar(
+                        x=pivot_sub["decil"],
+                        y=pivot_sub["N"],
+                        marker_color=PRIMARY,
+                        text=pivot_sub["N"],
+                        textposition="outside",
+                        hovertemplate="<b>" + producto + "</b><br>%{x}: %{y} scores<extra></extra>",
+                    ))
+                    fig_sub.update_layout(
+                        paper_bgcolor=WHITE,
+                        plot_bgcolor=WHITE,
+                        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                        title=dict(text=producto, font=dict(size=13, color=DEEP)),
+                        height=300,
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        xaxis=dict(title="Decil", gridcolor="#ede8f5"),
+                        yaxis=dict(title="Scores", gridcolor="#ede8f5"),
+                    )
+                    with col:
+                        st.plotly_chart(fig_sub, use_container_width=True)
+                if pivot_frames:
+                    pivot_all = pd.concat(pivot_frames, ignore_index=True)
+                    st.dataframe(
+                        pivot_all[["Producto", "decil", "N"]].rename(columns={"decil": "Decil"}),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
