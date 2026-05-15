@@ -175,6 +175,8 @@ def _product_bucket(value: object) -> str:
         "taas",
     }:
         return "Alianza"
+    if text in {"mm contengency", "nph"}:
+        return "Excluir"
     return _safe_str(value) or "Sin categoría"
 
 
@@ -790,6 +792,7 @@ else:
         credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
         credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
         credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
+        credit_join = credit_join[credit_join["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])].copy()
         credit_join = credit_join.sort_values(
             ["producto", "linea_negocio", "score_crediticio"],
             ascending=[True, True, False],
