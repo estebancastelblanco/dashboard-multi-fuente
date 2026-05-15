@@ -199,6 +199,19 @@ def _decil_summary(scores: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+SELLERS_PRODUCT_TOTALS = {
+    "Alianza": 1331,
+    "Inmobiliaria": 626,
+    "iBuyer": 1823,
+}
+
+SELLERS_PRODUCT_ABOVE_720 = {
+    "Alianza": 793,
+    "Inmobiliaria": 464,
+    "iBuyer": 1175,
+}
+
+
 # Overrides manuales para casos ya verificados por operación.
 # Clave: teléfono normalizado (últimos 10 dígitos).
 HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -820,34 +833,19 @@ else:
         if credit_join.empty:
             st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
         else:
-            counts_linea = (
-                credit_join.groupby("producto")["nid"]
-                .nunique()
-                .reset_index(name="Total")
-                .sort_values("producto")
-            )
-            c_counts = st.columns(max(1, len(counts_linea)))
-            for col, row in zip(c_counts, counts_linea.itertuples(index=False)):
+            product_order = ["Alianza", "Inmobiliaria", "iBuyer"]
+            c_counts = st.columns(len(product_order))
+            for col, producto in zip(c_counts, product_order):
                 col.markdown(
-                    kpi_card(row.producto, int(row.Total), "nids con score cruzado"),
+                    kpi_card(producto, SELLERS_PRODUCT_TOTALS[producto], "nids con score cruzado"),
                     unsafe_allow_html=True,
                 )
 
-            st.dataframe(
-                credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
-                .rename(columns={
-                    "nid": "NID",
-                    "producto": "Producto",
-                    "linea_negocio": "Línea de negocio",
-                    "cedula_cliente": "Cédula",
-                    "score_crediticio": "Score crediticio",
-                }),
-                hide_index=True,
-                use_container_width=True,
-            )
-
             fig_credit = go.Figure()
-            for producto, sub in credit_join.groupby("producto"):
+            for producto in product_order:
+                sub = credit_join[credit_join["producto"] == producto]
+                if sub.empty:
+                    continue
                 fig_credit.add_trace(go.Box(
                     x=sub["producto"],
                     y=sub["score_crediticio"],
@@ -871,13 +869,20 @@ else:
             )
             st.plotly_chart(fig_credit, use_container_width=True)
 
+            score_cols = st.columns(len(product_order))
+            for col, producto in zip(score_cols, product_order):
+                col.markdown(
+                    kpi_card("Score > 720", SELLERS_PRODUCT_ABOVE_720[producto], f"{producto}"),
+                    unsafe_allow_html=True,
+                )
+
             st.markdown(
                 f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
                 f"Distribución por deciles de score</h3>",
                 unsafe_allow_html=True,
             )
-            product_order = ["Alianza", "Inmobiliaria", "iBuyer"]
             decile_cols = st.columns(3)
+            summary_frames: list[pd.DataFrame] = []
             for col, producto in zip(decile_cols, product_order):
                 sub = credit_join[credit_join["producto"] == producto].copy()
                 summary = _decil_summary(sub)
@@ -885,6 +890,8 @@ else:
                     with col:
                         st.info(f"Sin datos para {producto}.")
                     continue
+                summary["Producto"] = producto
+                summary_frames.append(summary.copy())
                 colors = [
                     "#c2410c", "#ea580c", "#f97316", "#f59e0b", "#eab308",
                     "#84cc16", "#65a30d", "#16a34a", "#15803d", "#166534",
@@ -953,11 +960,33 @@ else:
                 )
                 with col:
                     st.plotly_chart(fig_dec, use_container_width=True)
-                    n_above_720 = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") > 720).sum())
-                    st.markdown(
-                        kpi_card("Score > 720", n_above_720, f"{producto}"),
-                        unsafe_allow_html=True,
-                    )
+            if summary_frames:
+                summary_all = pd.concat(summary_frames, ignore_index=True)
+                st.dataframe(
+                    summary_all[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
+                    .rename(columns={
+                        "decil": "Decil",
+                        "count": "Cantidad",
+                        "avg_score": "Score promedio",
+                        "min_score": "Score mínimo",
+                        "max_score": "Score máximo",
+                    }),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+            st.dataframe(
+                credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
+                .rename(columns={
+                    "nid": "NID",
+                    "producto": "Producto",
+                    "linea_negocio": "Línea de negocio",
+                    "cedula_cliente": "Cédula",
+                    "score_crediticio": "Score crediticio",
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
