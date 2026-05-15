@@ -139,6 +139,10 @@ def _short_label(text: object, max_len: int = 44) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
+def _safe_str(value: object) -> str:
+    return "" if pd.isna(value) else str(value).strip()
+
+
 # Overrides manuales para casos ya verificados por operación.
 # Clave: teléfono normalizado (últimos 10 dígitos).
 HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -147,6 +151,13 @@ HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
     "3118151183": ("No", "Contacto"),
     "9803235431": ("No", "Contacto"),
     "6594981801": ("Sí", "BNPL (HubSpot)"),
+}
+
+# Overrides por NID para casos verificados en BNPL.
+HIPOTECA_OVERRIDES_BY_NID: dict[str, tuple[str, str]] = {
+    "37995147392": ("Sí", "BNPL (HubSpot)"),
+    "57863591311": ("Sí", "BNPL (HubSpot)"),
+    "56594981801": ("Sí", "BNPL (HubSpot)"),
 }
 
 
@@ -462,8 +473,10 @@ df_in["contactado"] = (
 #   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
 #   - Sin ninguno de los dos → sin dato (toca llamar)
 def _hipoteca(row) -> tuple[str, str]:
-    phone_norm_raw = row.get("phone_norm", "")
-    phone_norm = "" if pd.isna(phone_norm_raw) else str(phone_norm_raw).strip()
+    nid = _safe_str(row.get("nid", ""))
+    if nid in HIPOTECA_OVERRIDES_BY_NID:
+        return HIPOTECA_OVERRIDES_BY_NID[nid]
+    phone_norm = _safe_str(row.get("phone_norm", ""))
     if phone_norm in HIPOTECA_OVERRIDES:
         return HIPOTECA_OVERRIDES[phone_norm]
     bnpl_raw = row.get("negocio_aplica_para_bnpl_", row.get("negocio_aplica_para_bnpl", ""))
