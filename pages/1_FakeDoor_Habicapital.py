@@ -878,7 +878,6 @@ else:
             )
             product_order = ["iBuyer", "Alianza", "Inmobiliaria"]
             decile_cols = st.columns(3)
-            summary_frames: list[pd.DataFrame] = []
             for col, producto in zip(decile_cols, product_order):
                 sub = credit_join[credit_join["producto"] == producto].copy()
                 summary = _decil_summary(sub)
@@ -886,8 +885,6 @@ else:
                     with col:
                         st.info(f"Sin datos para {producto}.")
                     continue
-                summary["Producto"] = producto
-                summary_frames.append(summary.copy())
                 colors = [
                     "#c2410c", "#ea580c", "#f97316", "#f59e0b", "#eab308",
                     "#84cc16", "#65a30d", "#16a34a", "#15803d", "#166534",
@@ -956,20 +953,6 @@ else:
                 )
                 with col:
                     st.plotly_chart(fig_dec, use_container_width=True)
-            if summary_frames:
-                summary_all = pd.concat(summary_frames, ignore_index=True)
-                st.dataframe(
-                    summary_all[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
-                    .rename(columns={
-                        "decil": "Decil",
-                        "count": "Cantidad",
-                        "avg_score": "Score promedio",
-                        "min_score": "Score mínimo",
-                        "max_score": "Score máximo",
-                    }),
-                    hide_index=True,
-                    use_container_width=True,
-                )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
