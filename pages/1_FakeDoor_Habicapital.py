@@ -180,6 +180,25 @@ def _product_bucket(value: object) -> str:
     return _safe_str(value) or "Sin categoría"
 
 
+def _decil_summary(scores: pd.DataFrame) -> pd.DataFrame:
+    if scores.empty:
+        return pd.DataFrame(columns=["decil", "count", "avg_score", "min_score", "max_score"])
+    work = scores.dropna(subset=["score_crediticio"]).copy()
+    if work.empty:
+        return pd.DataFrame(columns=["decil", "count", "avg_score", "min_score", "max_score"])
+    n_bins = min(10, max(1, len(work)))
+    labels = [f"D{i}" for i in range(1, n_bins + 1)]
+    ranked = work["score_crediticio"].rank(method="first")
+    work["decil"] = pd.qcut(ranked, n_bins, labels=labels)
+    summary = (
+        work.groupby("decil", observed=False)["score_crediticio"]
+        .agg(count="size", avg_score="mean", min_score="min", max_score="max")
+        .reindex(labels)
+        .reset_index()
+    )
+    return summary
+
+
 # Overrides manuales para casos ya verificados por operación.
 # Clave: teléfono normalizado (últimos 10 dígitos).
 HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -852,94 +871,105 @@ else:
             )
             st.plotly_chart(fig_credit, use_container_width=True)
 
-    try:
-        df_hs_2026 = load_hs_deals_2026()
-    except Exception as exc:
-        df_hs_2026 = pd.DataFrame(columns=["nid", "createdate"])
-        st.warning(f"HubSpot deals 2026: {type(exc).__name__}: {exc}")
-
-    nids_2026 = tuple(sorted(pd.to_numeric(df_hs_2026.get("nid", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).unique().tolist()))
-    if nids_2026:
-        try:
-            df_credit_2026 = load_sellers_credit_breakdown(nids_2026)
-        except Exception as exc:
-            df_credit_2026 = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
-            st.warning(f"BigQuery desglose crediticio 2026: {type(exc).__name__}: {exc}")
-
-        if not df_credit_2026.empty:
-            df_credit_2026["cedula_norm"] = df_credit_2026["cedula_cliente"].apply(_norm_doc_id)
-            scores_2026 = df_credit_2026.merge(
-                df_experian,
-                left_on="cedula_norm",
-                right_on="document_id_norm",
-                how="left",
+            st.markdown(
+                f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                f"Distribución por deciles de score</h3>",
+                unsafe_allow_html=True,
             )
-            scores_2026 = scores_2026.dropna(subset=["score_crediticio"]).copy()
-            if not scores_2026.empty:
-                scores_2026["score_crediticio"] = pd.to_numeric(scores_2026["score_crediticio"], errors="coerce")
-                scores_2026["producto"] = scores_2026["linea_negocio"].apply(_product_bucket)
-                scores_2026 = scores_2026[scores_2026["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])].copy()
-                ranked = scores_2026["score_crediticio"].rank(method="first")
-                n_bins = min(10, max(1, len(scores_2026)))
-                decil_labels = [f"D{i}" for i in range(1, n_bins + 1)]
-                scores_2026["decil"] = pd.qcut(
-                    ranked,
-                    n_bins,
-                    labels=decil_labels,
-                )
-                st.markdown(
-                    f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
-                    f"Scores 2026 por deciles y producto</h3>",
-                    unsafe_allow_html=True,
-                )
-                product_order = ["iBuyer", "Alianza", "Inmobiliaria"]
-                chart_cols = st.columns(3)
-                pivot_frames: list[pd.DataFrame] = []
-                for col, producto in zip(chart_cols, product_order):
-                    sub = scores_2026[scores_2026["producto"] == producto].copy()
-                    if sub.empty:
-                        with col:
-                            st.info(f"Sin scores 2026 para {producto}.")
-                        continue
-                    sub_ranked = sub["score_crediticio"].rank(method="first")
-                    sub_bins = min(10, max(1, len(sub)))
-                    sub_labels = [f"D{i}" for i in range(1, sub_bins + 1)]
-                    sub["decil"] = pd.qcut(sub_ranked, sub_bins, labels=sub_labels)
-                    pivot_sub = (
-                        sub.groupby("decil")
-                        .size()
-                        .reindex(sub_labels, fill_value=0)
-                        .reset_index(name="N")
-                    )
-                    pivot_sub["Producto"] = producto
-                    pivot_frames.append(pivot_sub.copy())
-                    fig_sub = go.Figure(go.Bar(
-                        x=pivot_sub["decil"],
-                        y=pivot_sub["N"],
-                        marker_color=PRIMARY,
-                        text=pivot_sub["N"],
-                        textposition="outside",
-                        hovertemplate="<b>" + producto + "</b><br>%{x}: %{y} scores<extra></extra>",
-                    ))
-                    fig_sub.update_layout(
-                        paper_bgcolor=WHITE,
-                        plot_bgcolor=WHITE,
-                        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                        title=dict(text=producto, font=dict(size=13, color=DEEP)),
-                        height=300,
-                        margin=dict(l=10, r=10, t=40, b=10),
-                        xaxis=dict(title="Decil", gridcolor="#ede8f5"),
-                        yaxis=dict(title="Scores", gridcolor="#ede8f5"),
-                    )
+            product_order = ["iBuyer", "Alianza", "Inmobiliaria"]
+            decile_cols = st.columns(3)
+            summary_frames: list[pd.DataFrame] = []
+            for col, producto in zip(decile_cols, product_order):
+                sub = credit_join[credit_join["producto"] == producto].copy()
+                summary = _decil_summary(sub)
+                if summary.empty:
                     with col:
-                        st.plotly_chart(fig_sub, use_container_width=True)
-                if pivot_frames:
-                    pivot_all = pd.concat(pivot_frames, ignore_index=True)
-                    st.dataframe(
-                        pivot_all[["Producto", "decil", "N"]].rename(columns={"decil": "Decil"}),
-                        hide_index=True,
-                        use_container_width=True,
+                        st.info(f"Sin datos para {producto}.")
+                    continue
+                summary["Producto"] = producto
+                summary_frames.append(summary.copy())
+                colors = [
+                    "#c2410c", "#ea580c", "#f97316", "#f59e0b", "#eab308",
+                    "#84cc16", "#65a30d", "#16a34a", "#15803d", "#166534",
+                ][:len(summary)]
+                y_labels = summary["decil"].iloc[::-1]
+                mins = summary["min_score"].iloc[::-1]
+                maxs = summary["max_score"].iloc[::-1]
+                avgs = summary["avg_score"].iloc[::-1]
+                counts = summary["count"].iloc[::-1]
+                fig_dec = go.Figure()
+                fig_dec.add_trace(go.Bar(
+                    x=(maxs - mins),
+                    y=y_labels,
+                    base=mins,
+                    orientation="h",
+                    marker=dict(color=colors[::-1], line=dict(color=DEEP, width=1)),
+                    hovertemplate=(
+                        "<b>%{y}</b><br>Rango: %{base:.0f} - %{x:+.0f}<extra></extra>"
+                    ),
+                    showlegend=False,
+                ))
+                fig_dec.add_trace(go.Scatter(
+                    x=avgs,
+                    y=y_labels,
+                    mode="markers",
+                    marker=dict(color="black", size=8),
+                    hovertemplate="<b>%{y}</b><br>Promedio: %{x:.1f}<extra></extra>",
+                    showlegend=False,
+                ))
+                for decil, min_s, max_s, avg_s, count_s in zip(y_labels, mins, maxs, avgs, counts):
+                    fig_dec.add_annotation(
+                        x=(min_s + max_s) / 2,
+                        y=decil,
+                        text=f"n={int(count_s)}",
+                        showarrow=False,
+                        font=dict(size=10, color=DEEP),
+                        bgcolor="rgba(255,255,255,0.8)",
                     )
+                    fig_dec.add_annotation(
+                        x=min_s,
+                        y=decil,
+                        text=f"{int(min_s)}",
+                        showarrow=False,
+                        xanchor="right",
+                        xshift=-8,
+                        font=dict(size=9, color=DEEP),
+                    )
+                    fig_dec.add_annotation(
+                        x=max_s,
+                        y=decil,
+                        text=f"{int(max_s)}",
+                        showarrow=False,
+                        xanchor="left",
+                        xshift=8,
+                        font=dict(size=9, color=DEEP),
+                    )
+                fig_dec.update_layout(
+                    paper_bgcolor=WHITE,
+                    plot_bgcolor=WHITE,
+                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                    title=dict(text=producto, font=dict(size=13, color=DEEP)),
+                    height=420,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                    yaxis=dict(title="Decil", categoryorder="array", categoryarray=list(y_labels)),
+                )
+                with col:
+                    st.plotly_chart(fig_dec, use_container_width=True)
+            if summary_frames:
+                summary_all = pd.concat(summary_frames, ignore_index=True)
+                st.dataframe(
+                    summary_all[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
+                    .rename(columns={
+                        "decil": "Decil",
+                        "count": "Cantidad",
+                        "avg_score": "Score promedio",
+                        "min_score": "Score mínimo",
+                        "max_score": "Score máximo",
+                    }),
+                    hide_index=True,
+                    use_container_width=True,
+                )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
