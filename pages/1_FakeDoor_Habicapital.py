@@ -401,6 +401,8 @@ if not df_hs.empty and "deal_uuid" in df_hs.columns:
                "estado_label", "oportunidad_del_negocio_label", "nid", "ctl"]
     if "negocio_aplica_para_bnpl" in df_hs.columns:
         hs_cols.append("negocio_aplica_para_bnpl")
+    if "negocio_aplica_para_bnpl_" in df_hs.columns:
+        hs_cols.append("negocio_aplica_para_bnpl_")
     df = df.merge(
         df_hs[hs_cols].rename(
             columns={"deal_uuid": "uuid_str", "ab_test_landing": "variante_hs"}
@@ -415,6 +417,7 @@ else:
     df["nid"] = None
     df["ctl"] = None
     df["negocio_aplica_para_bnpl"] = None
+    df["negocio_aplica_para_bnpl_"] = None
 
 df["contact_outcome"] = df.get("contesto?", pd.Series(dtype=str)).apply(_contact_outcome)
 lead_uuid_set = set(df["uuid_str"].dropna().astype(str))
@@ -438,12 +441,16 @@ if _applied(sel_estados, estados_all):
     df_in = df_in[df_in["estado_label"].isin(sel_estados)]
 
 # contactado = el teléfono aparece en la pestaña Entrevista. La pestaña
-# Entrevista es la fuente de verdad de a quiénes ya se llamó. Los que aplican
-# y NO están ahí son la call list activa ("Aplica + LLAMAR", verde claro).
+# Entrevista sigue siendo la mejor fuente, pero si el Sheet ya trae una
+# respuesta real en `contesto?` también lo tratamos como contacto confirmado.
+# Eso evita que leads ya gestionados se sigan viendo en verde claro.
 entrevista_phones: set[str] = set()
 if not df_int.empty and "phone_norm" in df_int.columns:
     entrevista_phones = set(df_int["phone_norm"].dropna().astype(str))
-df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
+df_in["contactado"] = (
+    df_in["phone_norm"].astype(str).isin(entrevista_phones)
+    | df_in["contact_outcome"].isin(["si", "no_interesado"])
+)
 
 
 # Hipoteca: dos fuentes posibles, priorizando entrevista (cliente directo) sobre
@@ -458,16 +465,20 @@ def _hipoteca(row) -> tuple[str, str]:
     phone_norm = str(row.get("phone_norm", "") or "").strip()
     if phone_norm in HIPOTECA_OVERRIDES:
         return HIPOTECA_OVERRIDES[phone_norm]
+    bnpl_raw = row.get("negocio_aplica_para_bnpl_", row.get("negocio_aplica_para_bnpl", ""))
+    b = _norm_text(bnpl_raw)
+    # Regla operativa pedida por negocio:
+    # "No" en BNPL => sí tiene hipoteca
+    # "Si" en BNPL => no tiene hipoteca
+    if b == "no":
+        return "Sí", "BNPL (HubSpot)"
+    if b == "si":
+        return "No", "BNPL (HubSpot)"
     entrevista = _hipoteca_from_contact(row.get("tiene hipoteca?", ""))
     if entrevista == "Sí":
         return "Sí", "Contacto"
     if entrevista == "No":
         return "No", "Contacto"
-    b = _norm_text(row.get("negocio_aplica_para_bnpl", ""))
-    if b == "no":
-        return "Sí", "BNPL (HubSpot)"
-    if b == "si":
-        return "No", "BNPL (HubSpot)"
     return "Sin dato", "Sin contactar"
 
 
@@ -862,7 +873,7 @@ st.markdown(legend_html, unsafe_allow_html=True)
 
 DISPLAY_COLS = [
     "nombre_completo", "telefono", "cedula", "grupo", "nid", "ctl", "fuente",
-    "contesto?", "tiene hipoteca?",
+    "contesto?", "hipoteca_status",
     "score", "nivel_riesgo", "aplica",
     "cuota_maxima", "ingresos_mensuales", "razon",
 ]
@@ -893,7 +904,7 @@ styled = (
     .rename(columns={
         "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
         "grupo": "Grupo", "nid": "NID", "ctl": "CTL", "fuente": "Fuente", "contesto?": "Contesto?",
-        "tiene hipoteca?": "Hipoteca?", "score": "Score", "nivel_riesgo": "Nivel",
+        "hipoteca_status": "Hipoteca?", "score": "Score", "nivel_riesgo": "Nivel",
         "aplica": "Aplica", "cuota_maxima": "Cuota Máxima",
         "ingresos_mensuales": "Ingresos", "razon": "Razón",
     })
@@ -931,7 +942,7 @@ else:
     # Sheets/Leads → cedula, grupo, contesto?, Aplica, score, nivel, cuota, ingresos, razon
     leads_cols = [c for c in [
         "uuid_str", "cedula", "grupo", "contesto?",
-        "aplica", "score", "nivel_riesgo",
+        "aplica", "score", "nivel_riesgo", "hipoteca_status", "hipoteca_fuente",
         "cuota_maxima", "ingresos_mensuales", "razon",
     ] if c in df_in.columns or c == "uuid_str"]
     leads_for_join = df_in[leads_cols].copy() if not df_in.empty else pd.DataFrame()
@@ -986,7 +997,8 @@ else:
         ("total_events",                "BQ eventos"),
         ("firmó T&C",                   "Firmó T&C"),
         ("contesto?",                   "Contestó?"),
-        ("tiene hipoteca?",             "Hipoteca?"),
+        ("hipoteca_status",             "Hipoteca?"),
+        ("hipoteca_fuente",             "Fuente hipoteca"),
         ("aplica",                      "Aplica"),
         ("score",                       "Score"),
         ("nivel_riesgo",                "Nivel"),

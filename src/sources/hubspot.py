@@ -20,6 +20,7 @@ FAKEDOOR_PROPS: dict[str, str] = {
     "ctl":                          "ctl",
     "flag_fakedoor":                "flag fakedoor",
     "negocio_aplica_para_bnpl":     "¿Negocio aplica para BNPL?",
+    "negocio_aplica_para_bnpl_":    "¿Negocio aplica para BNPL? (legacy)",
     "oportunidad_del_negocio":      "Oportunidad del negocio (CO)",
     "phone":                        "Teléfono",
     "nombre_del_conjunto":          "nombre del conjunto",
