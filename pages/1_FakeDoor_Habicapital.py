@@ -724,6 +724,7 @@ c3.markdown(kpi_card("Contactados", n_contactados, f"{n_contactados/max(1,n_lead
 c4.markdown(kpi_card("Interés activo", n_interes, f"{n_interes/max(1,n_leads):.0%}"), unsafe_allow_html=True)
 c5.markdown(kpi_card("Elegibles", n_aplica, "score≥720"), unsafe_allow_html=True)
 c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allow_html=True)
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
 
 
@@ -732,6 +733,7 @@ c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allo
 # Funnel (7 etapas, todo live, sin filtro de fecha)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Embudo del experimento</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
 pages_uuids = set(df_bq[df_bq.get("had_pages", 0) == 1]["uuid"].dropna().astype(str)) if not df_bq.empty else set()
 if not pages_uuids and not df_bq.empty and "uuid" in df_bq.columns:
@@ -801,6 +803,7 @@ st.plotly_chart(fig_funnel, use_container_width=True)
 # Desglose crediticio sellers
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Desgloce crediticio sellers</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
 if df_experian.empty:
     st.info("No se encontró el CSV de Experian con scores crediticios.")
@@ -840,6 +843,7 @@ else:
                     kpi_card(producto, SELLERS_PRODUCT_TOTALS[producto], "nids con score cruzado"),
                     unsafe_allow_html=True,
                 )
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
             fig_credit = go.Figure()
             for producto in product_order:
@@ -868,6 +872,7 @@ else:
                 yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
             )
             st.plotly_chart(fig_credit, use_container_width=True)
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
             score_cols = st.columns(len(product_order))
             for col, producto in zip(score_cols, product_order):
@@ -875,6 +880,7 @@ else:
                     kpi_card("Score > 720", SELLERS_PRODUCT_ABOVE_720[producto], f"{producto}"),
                     unsafe_allow_html=True,
                 )
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
             st.markdown(
                 f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
@@ -1258,17 +1264,6 @@ styled = (
     .style.apply(lambda r: _row_color(r.name), axis=1)
 )
 st.dataframe(styled, hide_index=True, use_container_width=True)
-
-n_total_sheet = len(df_leads)
-n_with_hs = int(df["fuente"].notna().sum())
-n_shown = len(disp_sorted)
-caption_parts = [f"{n_shown} leads mostrados · ordenados por prioridad de llamada"]
-if n_with_hs < n_total_sheet:
-    caption_parts.append(
-        f"⚠️ {n_total_sheet - n_with_hs} de {n_total_sheet} leads del Sheet "
-        f"no tienen deal con flag_fakedoor en HubSpot (no salen al filtrar por fuente/estado/oportunidad)"
-    )
-st.caption(" · ".join(caption_parts))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
