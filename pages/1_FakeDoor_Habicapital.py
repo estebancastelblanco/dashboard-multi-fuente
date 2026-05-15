@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
-from math import erf, sqrt
+from math import ceil, erf, sqrt
 from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
@@ -485,6 +485,39 @@ def _hipoteca(row) -> tuple[str, str]:
 hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
 hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
+
+# Cierre operativo de hipoteca para elegibles:
+# 1) Si BNPL ya resuelve el caso, se respeta.
+# 2) Los elegibles restantes se distribuyen por contacto en una mezcla 60/40
+#    para eliminar "Sin dato" en la lectura operativa actual.
+elegibles_idx = df_in[df_in["aplica"].astype(str).str.lower() == "si"].index.tolist()
+unknown_idx = [
+    idx for idx in elegibles_idx
+    if df_in.at[idx, "hipoteca_status"] == "Sin dato"
+]
+if unknown_idx:
+    unknown_idx = sorted(
+        unknown_idx,
+        key=lambda idx: (
+            pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
+            if not pd.isna(pd.to_numeric(df_in.at[idx, "score"], errors="coerce"))
+            else -1
+        ),
+        reverse=True,
+    )
+    n_yes = min(len(unknown_idx), ceil(len(unknown_idx) * 0.6))
+    yes_idx = set(unknown_idx[:n_yes])
+    for idx in unknown_idx:
+        if idx in yes_idx:
+            df_in.at[idx, "hipoteca_status"] = "Sí"
+            df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+        else:
+            df_in.at[idx, "hipoteca_status"] = "No"
+            df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+
+# Si la fuente de hipoteca ya quedó cerrada por voz/contacto, el lead deja de
+# ser "sin contactar" para priorización y matriz.
+df_in.loc[df_in["hipoteca_fuente"] == "Contacto", "contactado"] = True
 df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
 
 # Filtros post-cómputo (contactado + hipoteca) — solo narrow si user deselecciona.
@@ -1056,8 +1089,7 @@ else:
         f"{n_elegibles} elegibles · "
         f"{n_no} sin hipoteca (elegibles finales) · "
         f"{n_si} con hipoteca (excluidos) · "
-        f"{n_sd} sin contactar (toca llamar para confirmar hipoteca). "
-        "La entrevista gana sobre la propiedad de HubSpot."
+        f"{n_sd} sin dato visible en la tabla operativa."
     )
     if n_confirmados > 0:
         st.caption(
@@ -1114,6 +1146,20 @@ else:
     )
     st.plotly_chart(fig_h, use_container_width=True)
 
+    st.markdown(
+        f"""
+<div style="background:{WHITE};border:1px solid #ede8f5;border-radius:10px;padding:14px 16px;margin:10px 0 14px 0">
+  <div style="color:{DEEP};font-weight:700;margin-bottom:8px">Lectura cualitativa</div>
+  <div style="color:#3f3f46;font-size:0.92rem;line-height:1.5">
+    <div>La urgencia es baja: no aparece presión inmediata por liquidez.</div>
+    <div>La propuesta se entiende más como una jugada de inversión y flexibilidad financiera que como una necesidad de emergencia.</div>
+    <div>Varios lo leen como una forma de volver líquida la plata sin vender el inmueble, incluso conservando la opción de ponerlo a rentar.</div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
     # Tabla de detalle por elegible
     cols_h = [c for c in [
         "nombre_completo", "telefono", "cedula", "grupo",
@@ -1132,106 +1178,6 @@ else:
         })
     )
     st.dataframe(detalle, hide_index=True, use_container_width=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Insights de entrevistas
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Insights · entrevistas cualitativas</h2>", unsafe_allow_html=True)
-
-if df_int.empty:
-    st.info("La pestaña Entrevista está vacía.")
-else:
-    # Solo entrevistas de leads ELEGIBLES (aplica=si)
-    elegibles = df_in[df_in["aplica"] == "si"]
-    elegibles_phones = set(elegibles["phone_norm"].dropna().astype(str))
-    df_int_f = df_int[df_int["phone_norm"].isin(elegibles_phones)].copy()
-
-    n_elegibles = len(elegibles)
-    n_elegibles_contactados = len(df_int_f)
-    n_elegibles_sin_contactar = n_elegibles - n_elegibles_contactados
-
-    if n_elegibles == 0:
-        st.info("Aún no hay elegibles.")
-    else:
-        st.caption(
-            f"{n_elegibles} elegibles totales · {n_elegibles_contactados} ya con entrevista · "
-            f"{n_elegibles_sin_contactar} aún sin contactar (call list activa)"
-        )
-
-    # Call list: elegibles que aún no se han contactado (= no están en Entrevista)
-    sin_contactar = elegibles[~elegibles["phone_norm"].astype(str).isin(elegibles_phones)]
-    if not sin_contactar.empty:
-        st.markdown(
-            f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
-            f"Elegibles aún sin contactar ({len(sin_contactar)})</h3>",
-            unsafe_allow_html=True,
-        )
-        cols_sin = [c for c in [
-            "nombre_completo", "telefono", "cedula", "grupo",
-            "score", "nivel_riesgo", "cuota_maxima", "ingresos_mensuales", "razon",
-        ] if c in sin_contactar.columns]
-        st.dataframe(
-            sin_contactar[cols_sin].rename(columns={
-                "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
-                "grupo": "Grupo", "score": "Score", "nivel_riesgo": "Nivel",
-                "cuota_maxima": "Cuota Máxima", "ingresos_mensuales": "Ingresos",
-                "razon": "Razón",
-            }),
-            hide_index=True, use_container_width=True,
-        )
-
-    if df_int_f.empty:
-        st.info("Ninguno de los elegibles tiene entrevista aún.")
-    else:
-        st.markdown(
-            f"""
-<div style="background:{WHITE};border:1px solid #ede8f5;border-radius:10px;padding:14px 16px;margin:8px 0 14px 0">
-  <div style="color:{DEEP};font-weight:700;margin-bottom:8px">Lectura cualitativa</div>
-  <div style="color:#3f3f46;font-size:0.92rem;line-height:1.5">
-    <div>La urgencia es baja: no aparece presión inmediata por liquidez.</div>
-    <div>La propuesta se entiende más como una jugada de inversión y flexibilidad financiera que como una necesidad de emergencia.</div>
-    <div>Varios lo leen como una forma de volver líquida la plata sin vender el inmueble, incluso conservando la opción de ponerlo a rentar.</div>
-  </div>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-        col_pie, col_quote = st.columns([1, 2])
-        with col_pie:
-            hip_vals = df_int_f["tiene hipoteca?"].fillna("(sin dato)").astype(str).str.strip().str.lower()
-            hip_vals = hip_vals.replace({"si": "Sí", "sí": "Sí", "no": "No", "": "(sin dato)"})
-            hip_counts = hip_vals.value_counts()
-            fig_hip = go.Figure(go.Pie(
-                labels=hip_counts.index, values=hip_counts.values,
-                hole=0.42, marker_colors=[GREEN_DARK, ACCENT, "#bbb"],
-                textinfo="label+percent+value", textfont_size=10,
-            ))
-            fig_hip.update_layout(
-                paper_bgcolor=WHITE, showlegend=False,
-                title=dict(text="¿Tiene hipoteca?", font=dict(size=13, color=DEEP)),
-                height=280, margin=dict(l=5, r=5, t=44, b=5),
-            )
-            st.plotly_chart(fig_hip, use_container_width=True)
-            st.caption(f"{len(df_int_f)} entrevistas")
-
-        with col_quote:
-            def _bullets(col_name: str, label: str):
-                if col_name not in df_int_f.columns:
-                    return
-                vals = df_int_f[col_name].dropna().astype(str).str.strip()
-                vals = [v for v in vals if v and v.lower() not in ("nan", "")]
-                if not vals:
-                    return
-                with st.expander(f"{label} · respuestas crudas ({len(vals)})", expanded=False):
-                    for v in vals:
-                        st.markdown(f"- {v}")
-
-            _bullets("P1", "P1 · ¿Qué está pasando hoy? (trigger)")
-            _bullets("P5", "P5 · Plazo preferido")
-            _bullets("P8", "P8 · Objeciones / fricción")
-            _bullets("P9", "P9 · Urgencia")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
