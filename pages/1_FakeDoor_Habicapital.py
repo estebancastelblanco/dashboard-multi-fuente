@@ -771,87 +771,83 @@ st.markdown("<h2>Desgloce crediticio sellers</h2>", unsafe_allow_html=True)
 if df_experian.empty:
     st.info("No se encontró el CSV de Experian con scores crediticios.")
 else:
-    nids_credito = tuple(sorted(df_hs_f["nid"].dropna().astype(int).unique().tolist())) if not df_hs_f.empty else tuple()
-    if not nids_credito:
-        st.info("No hay `nid` disponibles en el filtro actual para cruzar el desglose crediticio.")
+    try:
+        df_credit = load_sellers_credit_breakdown(tuple())
+    except Exception as exc:
+        df_credit = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
+        st.warning(f"BigQuery desglose crediticio: {type(exc).__name__}: {exc}")
+
+    if df_credit.empty:
+        st.info("No hubo datos crediticios en BigQuery para construir el cruce.")
     else:
-        try:
-            df_credit = load_sellers_credit_breakdown(nids_credito)
-        except Exception as exc:
-            df_credit = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
-            st.warning(f"BigQuery desglose crediticio: {type(exc).__name__}: {exc}")
+        df_credit["cedula_norm"] = df_credit["cedula_cliente"].apply(_norm_doc_id)
+        credit_join = df_credit.merge(
+            df_experian,
+            left_on="cedula_norm",
+            right_on="document_id_norm",
+            how="left",
+        )
+        credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
+        credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
+        credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
+        credit_join = credit_join.sort_values(
+            ["producto", "linea_negocio", "score_crediticio"],
+            ascending=[True, True, False],
+        )
 
-        if df_credit.empty:
-            st.info("No hubo cruce crediticio para los `nid` filtrados.")
+        if credit_join.empty:
+            st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
         else:
-            df_credit["cedula_norm"] = df_credit["cedula_cliente"].apply(_norm_doc_id)
-            credit_join = df_credit.merge(
-                df_experian,
-                left_on="cedula_norm",
-                right_on="document_id_norm",
-                how="left",
+            counts_linea = (
+                credit_join.groupby("producto")["nid"]
+                .nunique()
+                .reset_index(name="Total")
+                .sort_values("producto")
             )
-            credit_join = credit_join.dropna(subset=["score_crediticio"]).copy()
-            credit_join["score_crediticio"] = credit_join["score_crediticio"].astype(int)
-            credit_join["producto"] = credit_join["linea_negocio"].apply(_product_bucket)
-            credit_join = credit_join.sort_values(
-                ["producto", "linea_negocio", "score_crediticio"],
-                ascending=[True, True, False],
+            c_counts = st.columns(max(1, len(counts_linea)))
+            for col, row in zip(c_counts, counts_linea.itertuples(index=False)):
+                col.markdown(
+                    kpi_card(row.producto, int(row.Total), "nids con score cruzado"),
+                    unsafe_allow_html=True,
+                )
+
+            st.dataframe(
+                credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
+                .rename(columns={
+                    "nid": "NID",
+                    "producto": "Producto",
+                    "linea_negocio": "Línea de negocio",
+                    "cedula_cliente": "Cédula",
+                    "score_crediticio": "Score crediticio",
+                }),
+                hide_index=True,
+                use_container_width=True,
             )
 
-            if credit_join.empty:
-                st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
-            else:
-                counts_linea = (
-                    credit_join.groupby("producto")["nid"]
-                    .nunique()
-                    .reset_index(name="Total")
-                    .sort_values("producto")
-                )
-                c_counts = st.columns(max(1, len(counts_linea)))
-                for col, row in zip(c_counts, counts_linea.itertuples(index=False)):
-                    col.markdown(
-                        kpi_card(row.producto, int(row.Total), "nids con score cruzado"),
-                        unsafe_allow_html=True,
-                    )
-
-                st.dataframe(
-                    credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
-                    .rename(columns={
-                        "nid": "NID",
-                        "producto": "Producto",
-                        "linea_negocio": "Línea de negocio",
-                        "cedula_cliente": "Cédula",
-                        "score_crediticio": "Score crediticio",
-                    }),
-                    hide_index=True,
-                    use_container_width=True,
-                )
-
-                fig_credit = go.Figure()
-                for producto, sub in credit_join.groupby("producto"):
-                    fig_credit.add_trace(go.Box(
-                        x=sub["producto"],
-                        y=sub["score_crediticio"],
-                        name=str(producto),
-                        boxpoints="all",
-                        jitter=0.25,
-                        pointpos=0,
-                        marker_color=PRIMARY,
-                        line_color=DEEP,
-                        showlegend=False,
-                    ))
-                fig_credit.update_layout(
-                    paper_bgcolor=WHITE,
-                    plot_bgcolor=WHITE,
-                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                    title=dict(text="Distribución de score por producto", font=dict(size=13, color=DEEP)),
-                    height=360,
-                    margin=dict(l=10, r=10, t=44, b=10),
-                    xaxis=dict(title="Producto", gridcolor="#ede8f5"),
-                    yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                )
-                st.plotly_chart(fig_credit, use_container_width=True)
+            fig_credit = go.Figure()
+            for producto, sub in credit_join.groupby("producto"):
+                fig_credit.add_trace(go.Box(
+                    x=sub["producto"],
+                    y=sub["score_crediticio"],
+                    name=str(producto),
+                    boxpoints="all",
+                    jitter=0.25,
+                    pointpos=0,
+                    marker_color=PRIMARY,
+                    line_color=DEEP,
+                    showlegend=False,
+                ))
+            fig_credit.update_layout(
+                paper_bgcolor=WHITE,
+                plot_bgcolor=WHITE,
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                title=dict(text="Distribución de score por producto", font=dict(size=13, color=DEEP)),
+                height=360,
+                margin=dict(l=10, r=10, t=44, b=10),
+                xaxis=dict(title="Producto", gridcolor="#ede8f5"),
+                yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+            )
+            st.plotly_chart(fig_credit, use_container_width=True)
 
     try:
         df_hs_2026 = load_hs_deals_2026()

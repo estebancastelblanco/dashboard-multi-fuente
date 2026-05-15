@@ -150,30 +150,20 @@ def fetch_deals_created_range(
     *,
     properties: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Trae deals creados desde una fecha y corta el rango final localmente.
-
-    HubSpot Search ha sido inestable con filtros dobles de createdate en este
-    entorno. Para evitar errores 400, se consulta solo con `GTE` y luego se
-    aplica el `until_iso` en memoria.
-    """
+    """Trae deals via listado paginado y filtra el rango localmente."""
     props = properties or ["nid", "createdate"]
-    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    url = "https://api.hubapi.com/crm/v3/objects/deals"
     rows: list[dict] = []
     after: str | None = None
-    since_ms = int(datetime.fromisoformat(since_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
-    filters = [
-        {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
-    ]
-    for _ in range(300):
-        payload = {
-            "filterGroups": [{"filters": filters}],
-            "properties": props,
-            "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
-            "limit": 100,
-        }
+    since_dt = pd.to_datetime(since_iso, errors="coerce", utc=True)
+    until_dt = pd.to_datetime(until_iso, errors="coerce", utc=True) if until_iso else None
+    for _ in range(500):
+        params: list[tuple[str, str | int]] = [("limit", 100), ("archived", "false")]
+        for prop in props:
+            params.append(("properties", prop))
         if after:
-            payload["after"] = after
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
+            params.append(("after", after))
+        resp = requests.get(url, params=params, headers=_headers(), timeout=30)
         resp.raise_for_status()
         body = resp.json()
         for deal in body.get("results", []):
@@ -186,12 +176,12 @@ def fetch_deals_created_range(
 
     df = pd.DataFrame(rows, columns=props)
     if "createdate" in df.columns:
-        df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
-        if until_iso:
-            until_dt = pd.to_datetime(until_iso, errors="coerce", utc=True)
-            if pd.notna(until_dt):
-                created_utc = pd.to_datetime(df["createdate"], errors="coerce", utc=True)
-                df = df[created_utc <= until_dt].copy()
+        created_utc = pd.to_datetime(df["createdate"], errors="coerce", utc=True)
+        df["createdate"] = created_utc
+        if pd.notna(since_dt):
+            df = df[created_utc >= since_dt].copy()
+        if pd.notna(until_dt):
+            df = df[created_utc <= until_dt].copy()
     return df
 
 
