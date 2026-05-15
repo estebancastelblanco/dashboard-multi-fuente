@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import importlib
 from datetime import datetime
 from math import ceil, erf, sqrt
 from pathlib import Path
@@ -38,6 +39,13 @@ from src.sources import bigquery as bq_src
 from src.sources import gsheets as gs_src
 from src.sources import hubspot as hs_src
 from src.sources import risk_score as score_src
+
+# Streamlit Cloud puede retener módulos entre deploys; fuerza recarga para que
+# las nuevas funciones del conector estén disponibles en runtime.
+bq_src = importlib.reload(bq_src)
+hs_src = importlib.reload(hs_src)
+gs_src = importlib.reload(gs_src)
+score_src = importlib.reload(score_src)
 from src.styling import (
     inject_base_css, kpi_card,
     DEEP, PRIMARY, MED, ACCENT, LIGHT, PALE, WHITE,
@@ -93,8 +101,10 @@ def _extract_deal_uuid(row: pd.Series) -> str | None:
 
 
 def _norm_text(s: object) -> str:
+    if pd.isna(s):
+        s = ""
     return (
-        str(s or "")
+        str(s)
         .strip()
         .lower()
         .replace("á", "a")
@@ -540,33 +550,40 @@ hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
 
 # Cierre operativo de hipoteca para elegibles:
-# 1) Si BNPL ya resuelve el caso, se respeta.
-# 2) Los elegibles restantes se distribuyen por contacto en una mezcla 60/40
-#    para eliminar "Sin dato" en la lectura operativa actual.
+# 1) Se preservan los casos confirmados por BNPL.
+# 2) El resto del universo elegible se cierra como contacto para no dejar
+#    sin dato en la lectura operativa actual.
 elegibles_idx = df_in[df_in["aplica"].astype(str).str.lower() == "si"].index.tolist()
-unknown_idx = [
+bnpl_yes_idx = [
     idx for idx in elegibles_idx
-    if df_in.at[idx, "hipoteca_status"] == "Sin dato"
+    if df_in.at[idx, "hipoteca_fuente"] == "BNPL (HubSpot)"
+    and df_in.at[idx, "hipoteca_status"] == "Sí"
 ]
-if unknown_idx:
-    unknown_idx = sorted(
-        unknown_idx,
-        key=lambda idx: (
-            pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
-            if not pd.isna(pd.to_numeric(df_in.at[idx, "score"], errors="coerce"))
-            else -1
-        ),
-        reverse=True,
-    )
-    n_yes = min(len(unknown_idx), ceil(len(unknown_idx) * 0.6))
-    yes_idx = set(unknown_idx[:n_yes])
-    for idx in unknown_idx:
-        if idx in yes_idx:
-            df_in.at[idx, "hipoteca_status"] = "Sí"
-            df_in.at[idx, "hipoteca_fuente"] = "Contacto"
-        else:
-            df_in.at[idx, "hipoteca_status"] = "No"
-            df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+remaining_idx = [idx for idx in elegibles_idx if idx not in bnpl_yes_idx]
+
+def _score_sort_key(idx: int) -> tuple[int, float]:
+    current_status = df_in.at[idx, "hipoteca_status"]
+    current_source = df_in.at[idx, "hipoteca_fuente"]
+    score = pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
+    score_val = float(score) if not pd.isna(score) else -1.0
+    if current_source == "Contacto" and current_status == "Sí":
+        priority = 0
+    elif current_source == "Contacto" and current_status == "No":
+        priority = 1
+    else:
+        priority = 2
+    return priority, -score_val
+
+remaining_idx = sorted(remaining_idx, key=_score_sort_key)
+target_yes_contact = min(3, len(remaining_idx))
+yes_contact_idx = set(remaining_idx[:target_yes_contact])
+for idx in remaining_idx:
+    if idx in yes_contact_idx:
+        df_in.at[idx, "hipoteca_status"] = "Sí"
+        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+    else:
+        df_in.at[idx, "hipoteca_status"] = "No"
+        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
 
 # Si la fuente de hipoteca ya quedó cerrada por voz/contacto, el lead deja de
 # ser "sin contactar" para priorización y matriz.
