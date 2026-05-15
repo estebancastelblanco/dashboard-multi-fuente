@@ -139,6 +139,17 @@ def _short_label(text: object, max_len: int = 44) -> str:
     return s[: max_len - 1].rstrip() + "…"
 
 
+# Overrides manuales para casos ya verificados por operación.
+# Clave: teléfono normalizado (últimos 10 dígitos).
+HIPOTECA_OVERRIDES: dict[str, tuple[str, str]] = {
+    "7995147392": ("Sí", "BNPL (HubSpot)"),
+    "7863591311": ("Sí", "BNPL (HubSpot)"),
+    "3118151183": ("No", "Contacto"),
+    "9803235431": ("No", "Contacto"),
+    "6594981801": ("Sí", "BNPL (HubSpot)"),
+}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Loaders — TTL largo (24h) para fuentes pesadas (HubSpot, BigQuery), corto
 # para Sheets (cambia con cada submit). persist="disk" sobrevive a reload.
@@ -444,6 +455,9 @@ df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
 #   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
 #   - Sin ninguno de los dos → sin dato (toca llamar)
 def _hipoteca(row) -> tuple[str, str]:
+    phone_norm = str(row.get("phone_norm", "") or "").strip()
+    if phone_norm in HIPOTECA_OVERRIDES:
+        return HIPOTECA_OVERRIDES[phone_norm]
     entrevista = _hipoteca_from_contact(row.get("tiene hipoteca?", ""))
     if entrevista == "Sí":
         return "Sí", "Contacto"
