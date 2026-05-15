@@ -571,16 +571,14 @@ pages_uuids = set(df_bq[df_bq.get("had_pages", 0) == 1]["uuid"].dropna().astype(
 if not pages_uuids and not df_bq.empty and "uuid" in df_bq.columns:
     pages_uuids = set(df_bq["uuid"].dropna().astype(str))
 
-# Etapa 1: Universo (HS flag_fakedoor)
-n_e1 = n_universe
-# Base histórica para delivery WA
+# Etapa 1: Universo de leads = deals con flag_fakedoor y nombre_del_conjunto.
 if not df_hs_f.empty and "nombre_del_conjunto" in df_hs_f.columns:
     n_con_conjunto = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum())
 else:
     n_con_conjunto = 0
-# Etapa 2: Enviados WA = 77% × Con conjunto (Infobip delivery historico)
-delivery_ratio = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.77)
-n_e2 = int(round(n_con_conjunto * delivery_ratio))
+n_e1 = n_con_conjunto
+# Etapa 2: Enviados WA = total operativo confirmado.
+n_e2 = 2091
 # Etapa 3: Abrieron pagina — usamos `ab_test_landing` de HubSpot. La JS del
 # front setea la propiedad solo cuando el cliente carga la landing y se le
 # asigna celda (AH/BH). Es más confiable que Segment, que pierde eventos
@@ -597,8 +595,8 @@ n_e5 = n_aplica
 n_e6 = n_aplica_sin_hip
 
 stages = [
-    ("Universo (flag fakedoor)",   n_e1, "HubSpot · sin filtro de fecha"),
-    ("Enviados WA",                n_e2, f"Estimado · {int(delivery_ratio*100)}% × Con conjunto"),
+    ("Universo de leads",          n_e1, "HubSpot · flag_fakedoor + nombre_del_conjunto"),
+    ("Enviados WA",                n_e2, "Operación · 2091 comunicaciones enviadas"),
     ("Abrieron página",            n_e3, "HubSpot · ab_test_landing ∈ {AH, BH}"),
     ("T&C firmados",               n_e4, "Sheets/Leads ∩ HS"),
     ("Elegibles",                  n_e5, "Aplica=si"),
@@ -800,8 +798,8 @@ else:
     if allowed_uuids:
         df_bq_in = df_bq_in[df_bq_in["uuid"].astype(str).isin(allowed_uuids)]
 
-    # Etapa 1: Enviados WA — replicamos del funnel principal
-    n_u1 = n_e2  # Enviados WA (77% × con conjunto), del funnel principal
+    # Etapa 1: Enviados WA — replicamos el total operativo confirmado.
+    n_u1 = n_e2
     # Etapa 2: Abrió primer link (/<uuid>)
     n_u2 = int(df_bq_in.get("visited_home", pd.Series(dtype=int)).fillna(0).astype(int).sum())
     # Etapa 3: Llegó a /solicitud
