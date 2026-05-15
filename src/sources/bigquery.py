@@ -167,3 +167,19 @@ def fetch_fakedoor_landing_events() -> pd.DataFrame:
     GROUP BY uuid
     """
     return _client().query(sql).to_dataframe()
+
+
+def fetch_fakedoor_client_categories(nids: list[int]) -> pd.DataFrame:
+    """Trae la categoría comercial declarada para los nids del FakeDoor."""
+    if not nids:
+        return pd.DataFrame(columns=["nid", "motivo_venta_string"])
+    nid_list = ",".join(str(int(n)) for n in nids[:5000])
+    sql = f"""
+        SELECT
+          nid,
+          motivo_venta_string
+        FROM `sellers-main-prod.mid_funnel_ibuyer.seller_digital_co_recepcionista_mm`
+        WHERE motivo_venta_string IS NOT NULL
+          AND nid IN ({nid_list})
+    """
+    return _client().query(sql).to_dataframe()

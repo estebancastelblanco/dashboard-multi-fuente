@@ -16,6 +16,8 @@ FAKEDOOR_PROPS: dict[str, str] = {
     "createdate":                   "Fecha de creación",
     "estado":                       "Estado del Negocio",
     "deal_uuid":                    "deal_uuid",
+    "nid":                          "nid",
+    "ctl":                          "ctl",
     "flag_fakedoor":                "flag fakedoor",
     "negocio_aplica_para_bnpl":     "¿Negocio aplica para BNPL?",
     "oportunidad_del_negocio":      "Oportunidad del negocio (CO)",

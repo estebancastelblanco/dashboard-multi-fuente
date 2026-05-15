@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from math import erf, sqrt
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -55,11 +57,36 @@ st.markdown(
 )
 
 
+UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
 def _norm_phone(s: object) -> str:
     s = str(s).strip().replace(" ", "").lstrip("+")
     if s.startswith("57") and len(s) > 10:
         s = s[2:]
     return s[-10:] if len(s) >= 10 else s
+
+
+def _extract_deal_uuid(row: pd.Series) -> str | None:
+    for col in ("uuid", "deal_uuid", "link", "url", "full_url"):
+        raw = str(row.get(col, "") or "").strip()
+        if not raw:
+            continue
+        if UUID_RX.fullmatch(raw):
+            return raw.lower()
+        try:
+            parsed = urlparse(raw)
+            query = parse_qs(parsed.query)
+            if "deal_uuid" in query and query["deal_uuid"]:
+                candidate = str(query["deal_uuid"][0]).strip().lower()
+                if UUID_RX.fullmatch(candidate):
+                    return candidate
+        except Exception:
+            pass
+        match = UUID_RX.search(raw)
+        if match:
+            return match.group(1).lower()
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,6 +101,11 @@ SHORT = 120      # 2 min
 def load_hs_deals() -> pd.DataFrame:
     # Sin filtro de fecha — universo = todos los deals con flag_fakedoor.
     return hs_src.fetch_fakedoor_deals(since_iso=None)
+
+
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · nid mapping…", persist="disk")
+def load_nid_mapping(deal_uuids: tuple[str, ...]) -> pd.DataFrame:
+    return bq_src.fetch_nid_for_uuids(list(deal_uuids))
 
 
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · catálogo de propiedades…", persist="disk")
@@ -117,6 +149,11 @@ def load_landing_events() -> pd.DataFrame:
         ])
 
 
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · categorías cliente…", persist="disk")
+def load_client_categories(nids: tuple[int, ...]) -> pd.DataFrame:
+    return bq_src.fetch_fakedoor_client_categories(list(nids))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Carga base
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +183,33 @@ df_bq = load_landing_events()
 # Decode internal IDs → labels en HubSpot
 # ─────────────────────────────────────────────────────────────────────────────
 if not df_hs.empty:
+    if "deal_uuid" in df_hs.columns:
+        df_hs["deal_uuid"] = df_hs["deal_uuid"].astype(str).str.strip().str.lower()
+        missing_nid = "nid" not in df_hs.columns or df_hs["nid"].isna().any()
+        if missing_nid:
+            uuids = tuple(sorted(df_hs["deal_uuid"].dropna().astype(str).unique().tolist()))
+            if uuids:
+                try:
+                    df_nid = load_nid_mapping(uuids)
+                except Exception as exc:
+                    df_nid = pd.DataFrame(columns=["deal_uuid", "nid"])
+                    st.warning(f"BQ nid mapping: {type(exc).__name__}: {exc}")
+                if not df_nid.empty:
+                    df_nid["deal_uuid"] = df_nid["deal_uuid"].astype(str).str.strip().str.lower()
+                    df_hs = df_hs.merge(
+                        df_nid[["deal_uuid", "nid"]],
+                        on="deal_uuid",
+                        how="left",
+                        suffixes=("", "_bq"),
+                    )
+                    if "nid_bq" in df_hs.columns:
+                        df_hs["nid"] = df_hs.get("nid").fillna(df_hs["nid_bq"])
+                        df_hs = df_hs.drop(columns=["nid_bq"])
+        if "nid" not in df_hs.columns:
+            df_hs["nid"] = None
+        df_hs["nid"] = pd.to_numeric(df_hs["nid"], errors="coerce")
+    if "ctl" not in df_hs.columns:
+        df_hs["ctl"] = None
     estado_map = labels_map.get("estado", {})
     oport_map = labels_map.get("oportunidad_del_negocio", {})
     df_hs["estado_label"] = df_hs.get("estado", pd.Series(dtype=str)).map(estado_map).fillna(df_hs.get("estado"))
@@ -160,6 +224,8 @@ else:
     df_hs["fuente"] = pd.Series(dtype=str)
     df_hs["estado_label"] = pd.Series(dtype=str)
     df_hs["oportunidad_del_negocio_label"] = pd.Series(dtype=str)
+    df_hs["nid"] = pd.Series(dtype=float)
+    df_hs["ctl"] = pd.Series(dtype=str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,7 +319,7 @@ allowed_uuids: set[str] = set(df_hs_f["deal_uuid"].dropna().astype(str)) if not 
 # Cruces Leads ↔ Entrevista ↔ HubSpot
 df = df_leads.copy()
 df["phone_norm"] = df["telefono"].apply(_norm_phone)
-df["uuid_str"] = df["uuid"].astype(str)
+df["uuid_str"] = df.apply(_extract_deal_uuid, axis=1)
 if not df_int.empty:
     df = df.merge(df_int[["phone_norm", "tiene hipoteca?"]], on="phone_norm", how="left")
 else:
@@ -263,7 +329,7 @@ else:
 # El filtrado se aplica abajo sobre las columnas ya mergeadas.
 if not df_hs.empty and "deal_uuid" in df_hs.columns:
     hs_cols = ["deal_uuid", "fuente", "ab_test_landing",
-               "estado_label", "oportunidad_del_negocio_label"]
+               "estado_label", "oportunidad_del_negocio_label", "nid", "ctl"]
     if "negocio_aplica_para_bnpl" in df_hs.columns:
         hs_cols.append("negocio_aplica_para_bnpl")
     df = df.merge(
@@ -277,6 +343,8 @@ else:
     df["variante_hs"] = None
     df["estado_label"] = None
     df["oportunidad_del_negocio_label"] = None
+    df["nid"] = None
+    df["ctl"] = None
     df["negocio_aplica_para_bnpl"] = None
 
 # Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
@@ -415,37 +483,36 @@ if not pages_uuids and not df_bq.empty and "uuid" in df_bq.columns:
 
 # Etapa 1: Universo (HS flag_fakedoor)
 n_e1 = n_universe
-# Etapa 2: Con nombre del conjunto
+# Base histórica para delivery WA
 if not df_hs_f.empty and "nombre_del_conjunto" in df_hs_f.columns:
-    n_e2 = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum())
+    n_con_conjunto = int(df_hs_f["nombre_del_conjunto"].fillna("").astype(str).str.strip().ne("").sum())
 else:
-    n_e2 = 0
-# Etapa 3: Enviados WA = 77% × Con conjunto (Infobip delivery historico)
+    n_con_conjunto = 0
+# Etapa 2: Enviados WA = 77% × Con conjunto (Infobip delivery historico)
 delivery_ratio = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.77)
-n_e3 = int(round(n_e2 * delivery_ratio))
-# Etapa 4: Abrieron pagina — usamos `ab_test_landing` de HubSpot. La JS del
+n_e2 = int(round(n_con_conjunto * delivery_ratio))
+# Etapa 3: Abrieron pagina — usamos `ab_test_landing` de HubSpot. La JS del
 # front setea la propiedad solo cuando el cliente carga la landing y se le
 # asigna celda (AH/BH). Es más confiable que Segment, que pierde eventos
 # cuando el tracker no ejecuta. n_e4 = AH + BH del universo filtrado.
 if not df_hs_f.empty and "ab_test_landing" in df_hs_f.columns:
-    n_e4 = int(df_hs_f["ab_test_landing"].astype(str).isin(["AH", "BH"]).sum())
+    n_e3 = int(df_hs_f["ab_test_landing"].astype(str).isin(["AH", "BH"]).sum())
 else:
-    n_e4 = 0
-# Etapa 5: T&C firmados (Sheet ∩ HS)
-n_e5 = n_leads
-# Etapa 6: Elegibles (Aplica=si — pasaron score del motor)
-n_e6 = n_aplica
-# Etapa 7: Aplican = elegibles con hipoteca confirmada en NO (entrevista o BNPL).
-n_e7 = n_aplica_sin_hip
+    n_e3 = 0
+# Etapa 4: T&C firmados (Sheet ∩ HS)
+n_e4 = n_leads
+# Etapa 5: Elegibles (Aplica=si — pasaron score del motor)
+n_e5 = n_aplica
+# Etapa 6: Aplican = elegibles con hipoteca confirmada en NO (entrevista o BNPL).
+n_e6 = n_aplica_sin_hip
 
 stages = [
     ("Universo (flag fakedoor)",   n_e1, "HubSpot · sin filtro de fecha"),
-    ("Con nombre del conjunto",    n_e2, "HubSpot · nombre_del_conjunto ≠ vacío"),
-    (f"Enviados WA",                n_e3, f"Estimado · {int(delivery_ratio*100)}% × Con conjunto"),
-    ("Abrieron página",             n_e4, "HubSpot · ab_test_landing ∈ {AH, BH}"),
-    ("T&C firmados",                n_e5, "Sheets/Leads ∩ HS"),
-    ("Elegibles",                   n_e6, "Aplica=si"),
-    ("Aplican (sin hipoteca)",      n_e7, "Aplica=si + hipoteca confirmada NO"),
+    ("Enviados WA",                n_e2, f"Estimado · {int(delivery_ratio*100)}% × Con conjunto"),
+    ("Abrieron página",            n_e3, "HubSpot · ab_test_landing ∈ {AH, BH}"),
+    ("T&C firmados",               n_e4, "Sheets/Leads ∩ HS"),
+    ("Elegibles",                  n_e5, "Aplica=si"),
+    ("Aplican (sin hipoteca)",     n_e6, "Aplica=si + hipoteca confirmada NO"),
 ]
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
@@ -560,6 +627,75 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Categorías cliente
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Categorías cliente</h2>", unsafe_allow_html=True)
+
+if df_hs_f.empty or "nid" not in df_hs_f.columns:
+    st.info("No hay deals con `nid` disponible para construir categorías.")
+else:
+    nids_cat = tuple(sorted(df_hs_f["nid"].dropna().astype(int).unique().tolist()))
+    if not nids_cat:
+        st.info("No hay `nid` disponible en los deals filtrados.")
+    else:
+        try:
+            df_cat = load_client_categories(nids_cat)
+        except Exception as exc:
+            df_cat = pd.DataFrame(columns=["nid", "motivo_venta_string"])
+            st.warning(f"BigQuery categorías cliente: {type(exc).__name__}: {exc}")
+
+        if df_cat.empty:
+            st.info("No hubo categorías en BigQuery para los leads filtrados del FakeDoor.")
+        else:
+            df_cat["nid"] = pd.to_numeric(df_cat["nid"], errors="coerce")
+            nids_visibles = set(df_hs_f["nid"].dropna().astype(int).tolist())
+            df_cat = df_cat[df_cat["nid"].isin(nids_visibles)].copy()
+            if df_cat.empty:
+                st.info("No hubo categorías cruzables con los `nid` visibles del FakeDoor.")
+                df_cat = pd.DataFrame(columns=["nid", "motivo_venta_string"])
+            counts = (
+                df_cat["motivo_venta_string"]
+                .fillna("(sin valor)")
+                .astype(str)
+                .str.strip()
+                .replace("", "(sin valor)")
+                .value_counts()
+                .reset_index()
+            )
+            if not counts.empty:
+                counts.columns = ["Categoría", "N"]
+                counts = counts.sort_values("N", ascending=True)
+
+                fig_cat = go.Figure(go.Bar(
+                    x=counts["N"],
+                    y=counts["Categoría"],
+                    orientation="h",
+                    marker=dict(
+                        color=counts["N"],
+                        colorscale=[[0, PALE], [1, PRIMARY]],
+                        showscale=False,
+                    ),
+                    text=counts["N"],
+                    textposition="outside",
+                    textfont_size=10,
+                ))
+                fig_cat.update_layout(
+                    paper_bgcolor=WHITE,
+                    plot_bgcolor=WHITE,
+                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                    height=max(320, len(counts) * 28 + 80),
+                    margin=dict(l=10, r=50, t=10, b=10),
+                    xaxis=dict(title="Leads", gridcolor="#ede8f5"),
+                    yaxis=dict(gridcolor="#ede8f5"),
+                )
+                st.plotly_chart(fig_cat, use_container_width=True)
+                st.caption(
+                    f"{int(df_cat['nid'].nunique())} nids con categoría en "
+                    "`seller_digital_co_recepcionista_mm`."
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Funnel de usabilidad de la landing (4 etapas BQ)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
@@ -572,7 +708,7 @@ else:
         df_bq_in = df_bq_in[df_bq_in["uuid"].astype(str).isin(allowed_uuids)]
 
     # Etapa 1: Enviados WA — replicamos del funnel principal
-    n_u1 = n_e3  # Enviados WA (77% × con conjunto), del funnel principal
+    n_u1 = n_e2  # Enviados WA (77% × con conjunto), del funnel principal
     # Etapa 2: Abrió primer link (/<uuid>)
     n_u2 = int(df_bq_in.get("visited_home", pd.Series(dtype=int)).fillna(0).astype(int).sum())
     # Etapa 3: Llegó a /solicitud
@@ -634,7 +770,7 @@ legend_html += "</div>"
 st.markdown(legend_html, unsafe_allow_html=True)
 
 DISPLAY_COLS = [
-    "nombre_completo", "telefono", "cedula", "grupo", "fuente",
+    "nombre_completo", "telefono", "cedula", "grupo", "nid", "ctl", "fuente",
     "contesto?", "tiene hipoteca?",
     "score", "nivel_riesgo", "aplica",
     "cuota_maxima", "ingresos_mensuales", "razon",
@@ -663,7 +799,7 @@ styled = (
     disp_sorted.drop(columns=["status"])
     .rename(columns={
         "nombre_completo": "Nombre", "telefono": "Teléfono", "cedula": "Cédula",
-        "grupo": "Grupo", "fuente": "Fuente", "contesto?": "Contesto?",
+        "grupo": "Grupo", "nid": "NID", "ctl": "CTL", "fuente": "Fuente", "contesto?": "Contesto?",
         "tiene hipoteca?": "Hipoteca?", "score": "Score", "nivel_riesgo": "Nivel",
         "aplica": "Aplica", "cuota_maxima": "Cuota Máxima",
         "ingresos_mensuales": "Ingresos", "razon": "Razón",
@@ -740,6 +876,8 @@ else:
     # Tabla final — orden y rename
     show_cols = [
         ("dealname",                    "Nombre del negocio"),
+        ("nid",                         "nid"),
+        ("ctl",                         "ctl"),
         ("phone",                       "Teléfono"),
         ("cedula",                      "Cédula"),
         ("createdate",                  "Fecha creación"),
