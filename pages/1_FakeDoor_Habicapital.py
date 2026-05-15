@@ -876,7 +876,7 @@ else:
                 f"Distribución por deciles de score</h3>",
                 unsafe_allow_html=True,
             )
-            product_order = ["iBuyer", "Alianza", "Inmobiliaria"]
+            product_order = ["Alianza", "Inmobiliaria", "iBuyer"]
             decile_cols = st.columns(3)
             for col, producto in zip(decile_cols, product_order):
                 sub = credit_join[credit_join["producto"] == producto].copy()
@@ -953,6 +953,11 @@ else:
                 )
                 with col:
                     st.plotly_chart(fig_dec, use_container_width=True)
+                    n_above_720 = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") > 720).sum())
+                    st.markdown(
+                        kpi_card("Score > 720", n_above_720, f"{producto}"),
+                        unsafe_allow_html=True,
+                    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
