@@ -89,6 +89,56 @@ def _extract_deal_uuid(row: pd.Series) -> str | None:
     return None
 
 
+def _norm_text(s: object) -> str:
+    return (
+        str(s or "")
+        .strip()
+        .lower()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+
+
+def _contact_outcome(value: object) -> str:
+    text = _norm_text(value)
+    if not text or text in {"nan", "none"}:
+        return "sin_dato"
+    if any(token in text for token in ["no interesado", "sin interes", "no le interesa", "desinteres"]):
+        return "no_interesado"
+    if any(token in text for token in ["no contesta", "no responde", "buzon", "rechazada", "rechazo", "no quiso hablar"]):
+        return "no_contesta"
+    if text in {"no", "n"}:
+        return "no_contesta"
+    if any(token in text for token in ["si", "contesto", "contestó", "hablo", "habló", "interesado"]):
+        return "si"
+    return "sin_dato"
+
+
+def _hipoteca_from_contact(value: object) -> str | None:
+    text = _norm_text(value)
+    if not text or text in {"nan", "none"}:
+        return None
+    if any(token in text for token in ["no tiene", "sin hipoteca", "libre", "no hipoteca"]):
+        return "No"
+    if any(token in text for token in ["si tiene", "tiene hipoteca", "con hipoteca", "hipotecado"]):
+        return "Sí"
+    if text == "si":
+        return "Sí"
+    if text == "no":
+        return "No"
+    return None
+
+
+def _short_label(text: object, max_len: int = 44) -> str:
+    s = str(text or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1].rstrip() + "…"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Loaders — TTL largo (24h) para fuentes pesadas (HubSpot, BigQuery), corto
 # para Sheets (cambia con cada submit). persist="disk" sobrevive a reload.
@@ -268,6 +318,14 @@ with st.sidebar:
     st.markdown("### Estado del Negocio")
     sel_estados = st.multiselect("estados", estados_all, default=estados_all, label_visibility="collapsed")
 
+    st.markdown("### Elegibilidad")
+    sel_elegibilidad = st.radio(
+        "elegibilidad",
+        ["Todos", "Solo elegibles"],
+        index=0,
+        label_visibility="collapsed",
+    )
+
     HIPO_STATUS_OPTS = ["Sí", "No", "Sin dato"]
     HIPO_FUENTE_OPTS = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
     CONTACTADO_OPTS = ["Sí", "No"]
@@ -347,6 +405,9 @@ else:
     df["ctl"] = None
     df["negocio_aplica_para_bnpl"] = None
 
+df["contact_outcome"] = df.get("contesto?", pd.Series(dtype=str)).apply(_contact_outcome)
+lead_uuid_set = set(df["uuid_str"].dropna().astype(str))
+
 # Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
 # pero leads sin match en HS solo se dropean cuando un filtro HS está activo.
 def _applied(sel: list, all_opts: list) -> bool:
@@ -383,12 +444,12 @@ df_in["contactado"] = df_in["phone_norm"].astype(str).isin(entrevista_phones)
 #   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
 #   - Sin ninguno de los dos → sin dato (toca llamar)
 def _hipoteca(row) -> tuple[str, str]:
-    e = str(row.get("tiene hipoteca?", "") or "").strip().lower().replace("í", "i")
-    if e == "si":
+    entrevista = _hipoteca_from_contact(row.get("tiene hipoteca?", ""))
+    if entrevista == "Sí":
         return "Sí", "Contacto"
-    if e == "no":
+    if entrevista == "No":
         return "No", "Contacto"
-    b = str(row.get("negocio_aplica_para_bnpl", "") or "").strip().lower().replace("í", "i")
+    b = _norm_text(row.get("negocio_aplica_para_bnpl", ""))
     if b == "no":
         return "Sí", "BNPL (HubSpot)"
     if b == "si":
@@ -413,14 +474,25 @@ if _applied(sel_hipoteca, HIPO_STATUS_OPTS):
     df_in = df_in[df_in["hipoteca_status"].isin(sel_hipoteca)]
 if _applied(sel_hipo_fuente, HIPO_FUENTE_OPTS):
     df_in = df_in[df_in["hipoteca_fuente"].isin(sel_hipo_fuente)]
+if sel_elegibilidad == "Solo elegibles":
+    df_in = df_in[df_in["aplica"].astype(str).str.lower() == "si"].copy()
+    eligible_uuids = set(df_in["uuid_str"].dropna().astype(str))
+    if not df_hs_f.empty:
+        df_hs_f = df_hs_f[df_hs_f["deal_uuid"].astype(str).isin(eligible_uuids)].copy()
+        allowed_uuids = set(df_hs_f["deal_uuid"].dropna().astype(str))
 
 
 def _status(row) -> str:
     aplica = row.get("aplica", "pending")
+    outcome = row.get("contact_outcome", "sin_dato")
     if aplica == "error":
         return "error"
     if aplica == "pending":
         return "pendiente_score"
+    if outcome == "no_interesado":
+        return "no_interesado"
+    if outcome == "no_contesta":
+        return "no_contesta"
     if aplica == "no" or row["con_hipoteca"]:
         return "no_aplica"
     return "aplica_contactado" if row["contactado"] else "aplica_pendiente_llamar"
@@ -432,6 +504,8 @@ STATUS_COLORS = {
     "aplica_contactado":       GREEN_DARK,
     "aplica_pendiente_llamar": GREEN_LIGHT,
     "pendiente_score":         YELLOW,
+    "no_contesta":             "#CBD5E1",
+    "no_interesado":           "#F59E0B",
     "no_aplica":               GREY,
     "error":                   RED,
 }
@@ -439,6 +513,8 @@ STATUS_LABELS = {
     "aplica_contactado":       "Aplica + contactado",
     "aplica_pendiente_llamar": "Aplica + LLAMAR",
     "pendiente_score":         "Pendiente de score",
+    "no_contesta":             "No contesta / sin contacto",
+    "no_interesado":           "No interesado",
     "no_aplica":               "No aplica",
     "error":                   "Error",
 }
@@ -450,7 +526,7 @@ STATUS_LABELS = {
 n_universe = len(df_hs_f) if not df_hs_f.empty else 0
 n_leads = len(df_in)
 n_contactados = int(df_in["contactado"].sum())
-n_interes = int((df_in["contesto?"].astype(str).str.lower() == "si").sum())
+n_interes = int((df_in["contact_outcome"] == "si").sum())
 # Elegibles = pasaron score (Aplica=si). El filtro de hipoteca se aplica
 # en la última etapa del funnel y en la sección Hipoteca.
 n_aplica = int((df_in["aplica"].astype(str).str.lower() == "si").sum())
@@ -664,11 +740,12 @@ else:
             )
             if not counts.empty:
                 counts.columns = ["Categoría", "N"]
-                counts = counts.sort_values("N", ascending=True)
+                counts = counts.head(10).sort_values("N", ascending=True)
+                counts["Categoría corta"] = counts["Categoría"].apply(_short_label)
 
                 fig_cat = go.Figure(go.Bar(
                     x=counts["N"],
-                    y=counts["Categoría"],
+                    y=counts["Categoría corta"],
                     orientation="h",
                     marker=dict(
                         color=counts["N"],
@@ -678,19 +755,21 @@ else:
                     text=counts["N"],
                     textposition="outside",
                     textfont_size=10,
+                    customdata=counts["Categoría"],
+                    hovertemplate="<b>%{customdata}</b><br>%{x} leads<extra></extra>",
                 ))
                 fig_cat.update_layout(
                     paper_bgcolor=WHITE,
                     plot_bgcolor=WHITE,
                     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
                     height=max(320, len(counts) * 28 + 80),
-                    margin=dict(l=10, r=50, t=10, b=10),
+                    margin=dict(l=220, r=50, t=10, b=10),
                     xaxis=dict(title="Leads", gridcolor="#ede8f5"),
-                    yaxis=dict(gridcolor="#ede8f5"),
+                    yaxis=dict(gridcolor="#ede8f5", automargin=True),
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
                 st.caption(
-                    f"{int(df_cat['nid'].nunique())} nids con categoría en "
+                    f"Top 10 categorías · {int(df_cat['nid'].nunique())} nids con categoría en "
                     "`seller_digital_co_recepcionista_mm`."
                 )
 
@@ -780,10 +859,12 @@ disp_sorted = disp.sort_values(
     by="status",
     key=lambda s: s.map({
         "aplica_pendiente_llamar": 0,
-        "pendiente_score":         1,
-        "aplica_contactado":       2,
-        "no_aplica":               3,
-        "error":                   4,
+        "aplica_contactado":       1,
+        "no_contesta":             2,
+        "no_interesado":           3,
+        "pendiente_score":         4,
+        "no_aplica":               5,
+        "error":                   6,
     }).fillna(99),
 ).reset_index(drop=True)
 
@@ -837,14 +918,12 @@ else:
 
     # Sheets/Leads → cedula, grupo, contesto?, Aplica, score, nivel, cuota, ingresos, razon
     leads_cols = [c for c in [
-        "uuid", "cedula", "grupo", "contesto?",
+        "uuid_str", "cedula", "grupo", "contesto?",
         "aplica", "score", "nivel_riesgo",
         "cuota_maxima", "ingresos_mensuales", "razon",
-    ] if c in df_in.columns or c == "uuid"]
+    ] if c in df_in.columns or c == "uuid_str"]
     leads_for_join = df_in[leads_cols].copy() if not df_in.empty else pd.DataFrame()
     if not leads_for_join.empty:
-        leads_for_join["uuid_str"] = leads_for_join["uuid"].astype(str)
-        leads_for_join = leads_for_join.drop(columns=["uuid"])
         consolidated = consolidated.merge(leads_for_join, on="uuid_str", how="left")
 
     # Entrevista → tiene hipoteca? (por teléfono)
@@ -935,6 +1014,19 @@ else:
     n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
     n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
     n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
+    elegibles_confirmados = elegibles_h[
+        (elegibles_h["hipoteca_fuente"] == "Contacto")
+        & (elegibles_h["hipoteca_status"].isin(["Sí", "No"]))
+    ].copy()
+    n_confirmados = len(elegibles_confirmados)
+    pct_si_confirmado = (
+        (elegibles_confirmados["hipoteca_status"] == "Sí").mean() * 100
+        if n_confirmados > 0 else 0.0
+    )
+    pct_no_confirmado = (
+        (elegibles_confirmados["hipoteca_status"] == "No").mean() * 100
+        if n_confirmados > 0 else 0.0
+    )
 
     st.caption(
         f"{n_elegibles} elegibles · "
@@ -943,6 +1035,11 @@ else:
         f"{n_sd} sin contactar (toca llamar para confirmar hipoteca). "
         "La entrevista gana sobre la propiedad de HubSpot."
     )
+    if n_confirmados > 0:
+        st.caption(
+            f"Confirmados por llamada: {n_confirmados} · "
+            f"{pct_si_confirmado:.0f}% con hipoteca · {pct_no_confirmado:.0f}% sin hipoteca."
+        )
 
     # Matriz tipo confusion matrix: filas = status hipoteca, cols = fuente
     status_order = ["Sí", "No", "Sin dato"]
@@ -1063,6 +1160,20 @@ else:
     if df_int_f.empty:
         st.info("Ninguno de los elegibles tiene entrevista aún.")
     else:
+        st.markdown(
+            f"""
+<div style="background:{WHITE};border:1px solid #ede8f5;border-radius:10px;padding:14px 16px;margin:8px 0 14px 0">
+  <div style="color:{DEEP};font-weight:700;margin-bottom:8px">Lectura cualitativa</div>
+  <div style="color:#3f3f46;font-size:0.92rem;line-height:1.5">
+    <div>La urgencia es baja: no aparece presión inmediata por liquidez.</div>
+    <div>La propuesta se entiende más como una jugada de inversión y flexibilidad financiera que como una necesidad de emergencia.</div>
+    <div>Varios lo leen como una forma de volver líquida la plata sin vender el inmueble, incluso conservando la opción de ponerlo a rentar.</div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
         col_pie, col_quote = st.columns([1, 2])
         with col_pie:
             hip_vals = df_int_f["tiene hipoteca?"].fillna("(sin dato)").astype(str).str.strip().str.lower()
@@ -1089,7 +1200,7 @@ else:
                 vals = [v for v in vals if v and v.lower() not in ("nan", "")]
                 if not vals:
                     return
-                with st.expander(f"{label} ({len(vals)} respuestas)", expanded=False):
+                with st.expander(f"{label} · respuestas crudas ({len(vals)})", expanded=False):
                     for v in vals:
                         st.markdown(f"- {v}")
 
@@ -1139,7 +1250,7 @@ def _conv_variante(var: str) -> tuple[int, int, float]:
     universo_v = df_hs[df_hs["ab_test_landing"] == var]
     n_u = len(universo_v)
     uuids_v = set(universo_v["deal_uuid"].dropna().astype(str))
-    n_tc_v = int(df_leads["uuid"].astype(str).isin(uuids_v).sum()) if "uuid" in df_leads.columns else 0
+    n_tc_v = int(sum(uuid in uuids_v for uuid in lead_uuid_set))
     conv = n_tc_v / n_u if n_u > 0 else 0.0
     return n_u, n_tc_v, conv
 
