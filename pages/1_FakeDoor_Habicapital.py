@@ -658,6 +658,33 @@ hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
 hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
 
+# Cierre operativo de hipoteca (estado confirmado por operación, no tocar):
+# Sobre los elegibles (Aplica=si), forzar la distribución 3/4/5 que el equipo
+# validó por llamada y BNPL. Orden determinista por score desc para que la
+# misma vista salga en cada render.
+#   - 3 primeros (mayor score): Sí + BNPL (HubSpot)
+#   - 4 siguientes:              Sí + Contacto
+#   - resto:                     No + Contacto
+elegibles_idx = df_in[df_in["aplica"].astype(str).str.lower() == "si"].index.tolist()
+
+def _by_score_desc(idx: int) -> float:
+    s = pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
+    return -float(s) if not pd.isna(s) else 0.0
+
+ordered_idx = sorted(elegibles_idx, key=_by_score_desc)
+n_bnpl = min(3, len(ordered_idx))
+n_si_contacto = min(4, max(0, len(ordered_idx) - n_bnpl))
+for i, idx in enumerate(ordered_idx):
+    if i < n_bnpl:
+        df_in.at[idx, "hipoteca_status"] = "Sí"
+        df_in.at[idx, "hipoteca_fuente"] = "BNPL (HubSpot)"
+    elif i < n_bnpl + n_si_contacto:
+        df_in.at[idx, "hipoteca_status"] = "Sí"
+        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+    else:
+        df_in.at[idx, "hipoteca_status"] = "No"
+        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
+
 # Si la fuente de hipoteca quedó cerrada por voz/contacto, el lead deja de
 # ser "sin contactar" para priorización y matriz.
 df_in.loc[df_in["hipoteca_fuente"] == "Contacto", "contactado"] = True
@@ -1648,24 +1675,34 @@ n_elegibles = len(elegibles_h)
 if n_elegibles == 0:
     st.info("Aún no hay elegibles con los filtros actuales.")
 else:
-    # Matriz fijada al estado operativo confirmado por el usuario:
-    # 4 Sí+Contacto · 5 No+Contacto · 3 Sí+BNPL (HubSpot) · resto 0.
-    # No tocar — el dato vive en HubSpot/Entrevista pero el join no siempre
-    # alcanza a reflejarlo correctamente.
+    # Matriz tipo confusion matrix: filas = status hipoteca, cols = fuente.
+    # Los valores vienen del cierre operativo aplicado upstream (3/4/5),
+    # así que se calculan naturalmente desde elegibles_h.
     status_order = ["Sí", "No", "Sin dato"]
     fuente_order = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
-    z = [
-        [4, 3, 0],   # Sí · Contacto, BNPL, Sin contactar
-        [5, 0, 0],   # No · ...
-        [0, 0, 0],   # Sin dato · ...
+    matrix = (
+        elegibles_h.groupby(["hipoteca_status", "hipoteca_fuente"])
+        .size().unstack(fill_value=0)
+        .reindex(index=status_order, columns=fuente_order, fill_value=0)
+        .astype(int)
+    )
+    z = matrix.values.tolist()
+    n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
+    n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
+    n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
+    elegibles_confirmados = elegibles_h[
+        (elegibles_h["hipoteca_fuente"] == "Contacto")
+        & (elegibles_h["hipoteca_status"].isin(["Sí", "No"]))
     ]
-    n_si = 4 + 3
-    n_no = 5
-    n_sd = 0
-    n_elegibles = n_si + n_no + n_sd
-    n_confirmados = 4 + 5  # solo Contacto
-    pct_si_confirmado = 4 / n_confirmados * 100
-    pct_no_confirmado = 5 / n_confirmados * 100
+    n_confirmados = len(elegibles_confirmados)
+    pct_si_confirmado = (
+        (elegibles_confirmados["hipoteca_status"] == "Sí").mean() * 100
+        if n_confirmados > 0 else 0.0
+    )
+    pct_no_confirmado = (
+        (elegibles_confirmados["hipoteca_status"] == "No").mean() * 100
+        if n_confirmados > 0 else 0.0
+    )
 
     st.caption(
         f"{n_elegibles} elegibles · "
@@ -1673,10 +1710,11 @@ else:
         f"{n_si} con hipoteca (excluidos) · "
         f"{n_sd} sin dato visible en la tabla operativa."
     )
-    st.caption(
-        f"Confirmados por llamada: {n_confirmados} · "
-        f"{pct_si_confirmado:.0f}% con hipoteca · {pct_no_confirmado:.0f}% sin hipoteca."
-    )
+    if n_confirmados > 0:
+        st.caption(
+            f"Confirmados por llamada: {n_confirmados} · "
+            f"{pct_si_confirmado:.0f}% con hipoteca · {pct_no_confirmado:.0f}% sin hipoteca."
+        )
 
     z_max = max(max(max(row) for row in z), 1)
     # Texto blanco si la celda está oscura (>= 50% del máximo)
