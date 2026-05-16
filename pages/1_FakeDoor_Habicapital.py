@@ -313,6 +313,24 @@ def load_experian_scores() -> pd.DataFrame:
     return df[["document_id_norm", "score_crediticio", "execution_date"]]
 
 
+@st.cache_data(ttl=DAY, show_spinner="CSV · scores Experian 2026…", persist="disk")
+def load_experian_scores_2026() -> pd.DataFrame:
+    if not EXPERIAN_CSV_PATH.exists():
+        return pd.DataFrame(columns=["document_id_norm", "score_crediticio", "execution_date"])
+    df = pd.read_csv(
+        EXPERIAN_CSV_PATH,
+        usecols=["document_id", "experian_response.score", "execution_date"],
+        dtype={"document_id": str},
+    )
+    df["document_id_norm"] = df["document_id"].apply(_norm_doc_id)
+    df["score_crediticio"] = pd.to_numeric(df["experian_response.score"], errors="coerce")
+    df["execution_date"] = pd.to_datetime(df["execution_date"], errors="coerce", utc=True)
+    df = df.dropna(subset=["document_id_norm", "score_crediticio", "execution_date"]).copy()
+    df = df[df["execution_date"].dt.year == 2026]
+    df = df.sort_values("execution_date").drop_duplicates("document_id_norm", keep="last")
+    return df[["document_id_norm", "score_crediticio", "execution_date"]]
+
+
 @st.cache_data(ttl=DAY, show_spinner="CSV · vida crediticia 3 meses…", persist="disk")
 def load_experian_recent_scores(months: int = 3) -> pd.DataFrame:
     if not EXPERIAN_CSV_PATH.exists():
@@ -378,6 +396,7 @@ except Exception as exc:
 
 df_bq = load_landing_events()
 df_experian = load_experian_scores()
+df_experian_2026 = load_experian_scores_2026()
 df_experian_recent = load_experian_recent_scores()
 df_escriturados_age = load_escriturados_age_score()
 
@@ -1114,33 +1133,52 @@ else:
                         st.plotly_chart(fig_scatter, use_container_width=True)
 
                     with corr_right:
-                        fig_box = go.Figure()
-                        for label in age_labels:
-                            sub = age_df[age_df["rango_edad"] == label]
-                            if sub.empty:
-                                continue
-                            fig_box.add_trace(go.Box(
-                                y=sub["score_crediticio"],
-                                name=label,
-                                boxpoints="outliers",
-                                marker_color=PRIMARY,
-                                line_color=DEEP,
-                                showlegend=False,
-                            ))
-                        fig_box.add_hline(
-                            y=720, line=dict(color=GREEN_DARK, width=2, dash="dash"),
-                            annotation_text="720", annotation_position="right",
-                            annotation_font=dict(color=GREEN_DARK, size=10),
-                        )
-                        fig_box.update_layout(
+                        fig_heat = go.Figure(go.Histogram2d(
+                            x=age_df["edad"],
+                            y=age_df["score_crediticio"],
+                            colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
+                            nbinsx=16,
+                            nbinsy=16,
+                            hovertemplate="Edad %{x}<br>Score %{y}<br>N %{z}<extra></extra>",
+                        ))
+                        fig_heat.update_layout(
                             paper_bgcolor=WHITE, plot_bgcolor=WHITE,
                             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                            title=dict(text="Score por rango de edad", font=dict(size=13, color=DEEP)),
-                            xaxis=dict(title="Rango de edad", gridcolor="#ede8f5"),
+                            title=dict(text="Matriz de concentración", font=dict(size=13, color=DEEP)),
+                            xaxis=dict(title="Edad", gridcolor="#ede8f5"),
                             yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                            height=380, margin=dict(l=10, r=80, t=40, b=10),
+                            height=380, margin=dict(l=10, r=10, t=40, b=10),
                         )
-                        st.plotly_chart(fig_box, use_container_width=True)
+                        st.plotly_chart(fig_heat, use_container_width=True)
+
+                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+                    fig_box = go.Figure()
+                    for label in age_labels:
+                        sub = age_df[age_df["rango_edad"] == label]
+                        if sub.empty:
+                            continue
+                        fig_box.add_trace(go.Box(
+                            y=sub["score_crediticio"],
+                            name=label,
+                            boxpoints="outliers",
+                            marker_color=PRIMARY,
+                            line_color=DEEP,
+                            showlegend=False,
+                        ))
+                    fig_box.add_hline(
+                        y=720, line=dict(color=GREEN_DARK, width=2, dash="dash"),
+                        annotation_text="720", annotation_position="right",
+                        annotation_font=dict(color=GREEN_DARK, size=10),
+                    )
+                    fig_box.update_layout(
+                        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                        title=dict(text="Score por rango de edad", font=dict(size=13, color=DEEP)),
+                        xaxis=dict(title="Rango de edad", gridcolor="#ede8f5"),
+                        yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                        height=340, margin=dict(l=10, r=80, t=40, b=10),
+                    )
+                    st.plotly_chart(fig_box, use_container_width=True)
 
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                     age_summary = (
@@ -1207,6 +1245,213 @@ else:
                     hide_index=True,
                     use_container_width=True,
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Distribución crediticia · solo 2026 (réplica filtrada por execution_date)
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Distribución crediticia · solo 2026</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+if df_experian_2026.empty:
+    st.info("No hay scores con execution_date en 2026.")
+else:
+    try:
+        df_credit_26 = load_sellers_credit_breakdown(tuple())
+    except Exception as exc:
+        df_credit_26 = pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
+        st.warning(f"BigQuery desglose crediticio 2026: {type(exc).__name__}: {exc}")
+
+    if df_credit_26.empty:
+        st.info("No hubo datos crediticios en BigQuery para construir el cruce 2026.")
+    else:
+        df_credit_26["cedula_norm"] = df_credit_26["cedula_cliente"].apply(_norm_doc_id)
+        credit_join_26 = df_credit_26.merge(
+            df_experian_2026, left_on="cedula_norm", right_on="document_id_norm", how="inner",
+        )
+        credit_join_26["score_crediticio"] = credit_join_26["score_crediticio"].astype(int)
+        credit_join_26["producto"] = credit_join_26["linea_negocio"].apply(_product_bucket)
+        credit_join_26 = credit_join_26[credit_join_26["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])].copy()
+        credit_join_26 = credit_join_26.sort_values(
+            ["producto", "linea_negocio", "score_crediticio"], ascending=[True, True, False],
+        )
+
+        if credit_join_26.empty:
+            st.info("No hubo match entre cédulas sellers y scores 2026 de Experian.")
+        else:
+            product_order_26 = ["Alianza", "Inmobiliaria", "iBuyer"]
+            counts_26 = credit_join_26["producto"].value_counts().to_dict()
+            above_720_26 = (
+                credit_join_26[credit_join_26["score_crediticio"] >= 720]["producto"]
+                .value_counts().to_dict()
+            )
+
+            c_counts_26 = st.columns(len(product_order_26))
+            for col, producto in zip(c_counts_26, product_order_26):
+                col.markdown(
+                    kpi_card(producto, counts_26.get(producto, 0), "consultas 2026"),
+                    unsafe_allow_html=True,
+                )
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            fig_credit_26 = go.Figure()
+            for producto in product_order_26:
+                sub = credit_join_26[credit_join_26["producto"] == producto]
+                if sub.empty:
+                    continue
+                fig_credit_26.add_trace(go.Box(
+                    x=sub["producto"], y=sub["score_crediticio"], name=str(producto),
+                    boxpoints="all", jitter=0.25, pointpos=0,
+                    marker_color=PRIMARY, line_color=DEEP, showlegend=False,
+                ))
+            fig_credit_26.update_layout(
+                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                title=dict(text="Distribución de score por producto · 2026", font=dict(size=13, color=DEEP)),
+                height=360, margin=dict(l=10, r=10, t=44, b=10),
+                xaxis=dict(title="Producto", gridcolor="#ede8f5"),
+                yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+            )
+            st.plotly_chart(fig_credit_26, use_container_width=True)
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            st.markdown(
+                f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                f"Vida crediticia · 2026</h3>",
+                unsafe_allow_html=True,
+            )
+            scores_26 = pd.to_numeric(df_experian_2026["score_crediticio"], errors="coerce")
+            score_zero_26 = int((scores_26 == 0).sum())
+            score_non_zero_26 = int((scores_26 > 0).sum())
+            avg_all_26 = float(scores_26.mean()) if not scores_26.empty else 0.0
+            avg_non_zero_26 = float(scores_26[scores_26 > 0].mean()) if (scores_26 > 0).any() else 0.0
+            life26_c1, life26_c2, life26_c3, life26_c4 = st.columns(4)
+            life26_c1.markdown(kpi_card("Score = 0", score_zero_26, "sin vida crediticia"), unsafe_allow_html=True)
+            life26_c2.markdown(kpi_card("Score > 0", score_non_zero_26, "con vida crediticia"), unsafe_allow_html=True)
+            life26_c3.markdown(kpi_card("Promedio total", f"{avg_all_26:.1f}", "todo 2026"), unsafe_allow_html=True)
+            life26_c4.markdown(kpi_card("Promedio sin 0", f"{avg_non_zero_26:.1f}", "todo 2026"), unsafe_allow_html=True)
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+
+            fig_life_26 = go.Figure(go.Histogram(
+                x=df_experian_2026["score_crediticio"],
+                marker_color=PRIMARY, opacity=0.85, nbinsx=30,
+                hovertemplate="Score %{x}<br>Registros %{y}<extra></extra>",
+                showlegend=False,
+            ))
+            fig_life_26.update_layout(
+                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                title=dict(text="Distribución de scores crediticios · 2026", font=dict(size=13, color=DEEP)),
+                xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                yaxis=dict(title="Registros", gridcolor="#ede8f5"),
+                height=360, margin=dict(l=10, r=10, t=44, b=10),
+            )
+            st.plotly_chart(fig_life_26, use_container_width=True)
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            score_cols_26 = st.columns(len(product_order_26))
+            for col, producto in zip(score_cols_26, product_order_26):
+                col.markdown(
+                    kpi_card("Score > 720", above_720_26.get(producto, 0), f"{producto} · 2026"),
+                    unsafe_allow_html=True,
+                )
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            st.markdown(
+                f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                f"Distribución por deciles de score · 2026</h3>",
+                unsafe_allow_html=True,
+            )
+            decile_cols_26 = st.columns(3)
+            summary_frames_26: list[pd.DataFrame] = []
+            for col, producto in zip(decile_cols_26, product_order_26):
+                sub = credit_join_26[credit_join_26["producto"] == producto].copy()
+                summary = _decil_summary(sub)
+                if summary.empty:
+                    with col:
+                        st.info(f"Sin datos para {producto} en 2026.")
+                    continue
+                summary["Producto"] = producto
+                summary_frames_26.append(summary.copy())
+                colors_26 = [
+                    "#c2410c", "#ea580c", "#f97316", "#f59e0b", "#eab308",
+                    "#84cc16", "#65a30d", "#16a34a", "#15803d", "#166534",
+                ][:len(summary)]
+                y_labels = summary["decil"].iloc[::-1]
+                mins = summary["min_score"].iloc[::-1]
+                maxs = summary["max_score"].iloc[::-1]
+                avgs = summary["avg_score"].iloc[::-1]
+                counts_d = summary["count"].iloc[::-1]
+                fig_dec_26 = go.Figure()
+                fig_dec_26.add_trace(go.Bar(
+                    x=(maxs - mins), y=y_labels, base=mins, orientation="h",
+                    marker=dict(color=colors_26[::-1], line=dict(color=DEEP, width=1)),
+                    hovertemplate="<b>%{y}</b><br>Rango: %{base:.0f} - %{x:+.0f}<extra></extra>",
+                    showlegend=False,
+                ))
+                fig_dec_26.add_trace(go.Scatter(
+                    x=avgs, y=y_labels, mode="markers",
+                    marker=dict(color="black", size=8),
+                    hovertemplate="<b>%{y}</b><br>Promedio: %{x:.1f}<extra></extra>",
+                    showlegend=False,
+                ))
+                for decil, min_s, max_s, avg_s, count_s in zip(y_labels, mins, maxs, avgs, counts_d):
+                    fig_dec_26.add_annotation(
+                        x=(min_s + max_s) / 2, y=decil, text=f"n={int(count_s)}",
+                        showarrow=False, font=dict(size=10, color=DEEP),
+                        bgcolor="rgba(255,255,255,0.8)",
+                    )
+                    fig_dec_26.add_annotation(
+                        x=min_s, y=decil, text=f"{int(min_s)}",
+                        showarrow=False, xanchor="right", xshift=-8,
+                        font=dict(size=9, color=DEEP),
+                    )
+                    fig_dec_26.add_annotation(
+                        x=max_s, y=decil, text=f"{int(max_s)}",
+                        showarrow=False, xanchor="left", xshift=8,
+                        font=dict(size=9, color=DEEP),
+                    )
+                fig_dec_26.update_layout(
+                    paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                    title=dict(text=producto, font=dict(size=13, color=DEEP)),
+                    height=420, margin=dict(l=10, r=10, t=40, b=10),
+                    xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                    yaxis=dict(title="Decil", categoryorder="array", categoryarray=list(y_labels)),
+                )
+                with col:
+                    st.plotly_chart(fig_dec_26, use_container_width=True)
+
+            if summary_frames_26:
+                summary_all_26 = pd.concat(summary_frames_26, ignore_index=True)
+                with st.expander("Tabla · resumen de deciles · 2026", expanded=False):
+                    st.dataframe(
+                        summary_all_26[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
+                        .rename(columns={
+                            "decil": "Decil", "count": "Cantidad",
+                            "avg_score": "Score promedio",
+                            "min_score": "Score mínimo", "max_score": "Score máximo",
+                        }),
+                        hide_index=True, use_container_width=True,
+                    )
+
+            with st.expander("Tabla · detalle de score crediticio · 2026", expanded=False):
+                st.dataframe(
+                    credit_join_26[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio", "execution_date"]]
+                    .rename(columns={
+                        "nid": "NID", "producto": "Producto",
+                        "linea_negocio": "Línea de negocio", "cedula_cliente": "Cédula",
+                        "score_crediticio": "Score crediticio",
+                        "execution_date": "Fecha consulta",
+                    }),
+                    hide_index=True, use_container_width=True,
+                )
+
+            st.caption(
+                f"Filtro: `execution_date` del CSV de Experian con año 2026 "
+                f"(última consulta por cédula). Total scores 2026: {len(df_experian_2026):,} · "
+                f"con match en sellers BQ: {len(credit_join_26):,}."
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
