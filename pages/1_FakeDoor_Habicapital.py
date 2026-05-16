@@ -1061,67 +1061,124 @@ else:
                     k4.markdown(kpi_card("Correlación", f"{0.0 if pd.isna(corr) else corr:.2f}", "edad vs score"), unsafe_allow_html=True)
 
                     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                    # Bucketizar edades en rangos de 10 años (20s, 30s, ..., 70+)
+                    age_bins = [20, 30, 40, 50, 60, 70, 200]
+                    age_labels = ["20-29", "30-39", "40-49", "50-59", "60-69", "70+"]
+                    age_df["rango_edad"] = pd.cut(
+                        age_df["edad"], bins=age_bins, labels=age_labels, right=False
+                    )
+                    age_df["banda_score"] = age_df["score_crediticio"].apply(
+                        lambda s: "Sin vida (0)" if s == 0
+                        else ("≥720 (elegible)" if s >= 720 else "<720")
+                    )
+
                     corr_left, corr_right = st.columns(2)
                     with corr_left:
+                        sin_vida = age_df[age_df["score_crediticio"] == 0]
+                        con_vida = age_df[age_df["score_crediticio"] > 0]
                         fig_scatter = go.Figure()
-                        for producto in product_order_age:
-                            sub = age_df[age_df["producto"] == producto]
+                        fig_scatter.add_trace(go.Scatter(
+                            x=con_vida["edad"], y=con_vida["score_crediticio"],
+                            mode="markers", name="Con vida crediticia",
+                            opacity=0.55,
+                            marker=dict(size=7, color=PRIMARY),
+                            hovertemplate="Edad: %{x}<br>Score: %{y}<extra></extra>",
+                        ))
+                        if not sin_vida.empty:
                             fig_scatter.add_trace(go.Scatter(
-                                x=sub["edad"],
-                                y=sub["score_crediticio"],
-                                mode="markers",
-                                name=producto,
-                                opacity=0.7,
-                                marker=dict(size=8),
-                                hovertemplate=f"<b>{producto}</b><br>Edad: %{{x}}<br>Score: %{{y}}<extra></extra>",
+                                x=sin_vida["edad"], y=sin_vida["score_crediticio"],
+                                mode="markers", name="Sin vida (score=0)",
+                                marker=dict(size=10, color=RED, symbol="x", line=dict(width=2)),
+                                hovertemplate="Edad: %{x}<br>Score: 0<extra></extra>",
                             ))
-                            if len(sub) >= 2:
-                                x_vals = sub["edad"].astype(float).to_numpy()
-                                y_vals = sub["score_crediticio"].astype(float).to_numpy()
-                                coeff = pd.Series(y_vals).cov(pd.Series(x_vals)) / pd.Series(x_vals).var() if pd.Series(x_vals).var() else 0
-                                intercept = y_vals.mean() - coeff * x_vals.mean()
-                                x_line = sorted(set(x_vals))
-                                y_line = [coeff * x + intercept for x in x_line]
-                                fig_scatter.add_trace(go.Scatter(
-                                    x=x_line,
-                                    y=y_line,
-                                    mode="lines",
-                                    name=f"Tendencia {producto}",
-                                    showlegend=False,
-                                    line=dict(width=2, dash="dot"),
-                                ))
+                        fig_scatter.add_hline(
+                            y=720, line=dict(color=GREEN_DARK, width=2, dash="dash"),
+                            annotation_text="Umbral 720", annotation_position="right",
+                            annotation_font=dict(color=GREEN_DARK, size=10),
+                        )
+                        fig_scatter.add_hline(
+                            y=0, line=dict(color=RED, width=1, dash="dot"),
+                            annotation_text="Sin vida", annotation_position="right",
+                            annotation_font=dict(color=RED, size=10),
+                        )
                         fig_scatter.update_layout(
-                            paper_bgcolor=WHITE,
-                            plot_bgcolor=WHITE,
+                            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
                             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
                             title=dict(text="Dispersión edad vs score", font=dict(size=13, color=DEEP)),
                             xaxis=dict(title="Edad", gridcolor="#ede8f5"),
                             yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                            height=380,
-                            margin=dict(l=10, r=10, t=40, b=10),
+                            height=380, margin=dict(l=10, r=80, t=40, b=10),
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0),
                         )
                         st.plotly_chart(fig_scatter, use_container_width=True)
 
                     with corr_right:
-                        fig_heat = go.Figure(go.Histogram2d(
-                            x=age_df["edad"],
-                            y=age_df["score_crediticio"],
-                            colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
-                            nbinsx=16,
-                            nbinsy=16,
-                            hovertemplate="Edad %{x}<br>Score %{y}<br>N %{z}<extra></extra>",
-                        ))
-                        fig_heat.update_layout(
-                            paper_bgcolor=WHITE,
-                            plot_bgcolor=WHITE,
-                            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                            title=dict(text="Matriz de concentración", font=dict(size=13, color=DEEP)),
-                            xaxis=dict(title="Edad", gridcolor="#ede8f5"),
-                            yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                            height=380,
-                            margin=dict(l=10, r=10, t=40, b=10),
+                        fig_box = go.Figure()
+                        for label in age_labels:
+                            sub = age_df[age_df["rango_edad"] == label]
+                            if sub.empty:
+                                continue
+                            fig_box.add_trace(go.Box(
+                                y=sub["score_crediticio"],
+                                name=label,
+                                boxpoints="outliers",
+                                marker_color=PRIMARY,
+                                line_color=DEEP,
+                                showlegend=False,
+                            ))
+                        fig_box.add_hline(
+                            y=720, line=dict(color=GREEN_DARK, width=2, dash="dash"),
+                            annotation_text="720", annotation_position="right",
+                            annotation_font=dict(color=GREEN_DARK, size=10),
                         )
-                        st.plotly_chart(fig_heat, use_container_width=True)
+                        fig_box.update_layout(
+                            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                            title=dict(text="Score por rango de edad", font=dict(size=13, color=DEEP)),
+                            xaxis=dict(title="Rango de edad", gridcolor="#ede8f5"),
+                            yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                            height=380, margin=dict(l=10, r=80, t=40, b=10),
+                        )
+                        st.plotly_chart(fig_box, use_container_width=True)
+
+                    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                    age_summary = (
+                        age_df.assign(
+                            es_cero=lambda d: (d["score_crediticio"] == 0).astype(int),
+                            es_elegible=lambda d: (d["score_crediticio"] >= 720).astype(int),
+                            es_bajo=lambda d: ((d["score_crediticio"] > 0) & (d["score_crediticio"] < 720)).astype(int),
+                        )
+                        .groupby("rango_edad", observed=True)
+                        .agg(
+                            N=("score_crediticio", "size"),
+                            score_mediana=("score_crediticio", "median"),
+                            pct_score_0=("es_cero", "mean"),
+                            pct_menor_720=("es_bajo", "mean"),
+                            pct_elegible=("es_elegible", "mean"),
+                        )
+                        .reindex(age_labels)
+                        .dropna(subset=["N"])
+                        .reset_index()
+                    )
+                    age_summary["pct_score_0"] = (age_summary["pct_score_0"] * 100).round(1).astype(str) + "%"
+                    age_summary["pct_menor_720"] = (age_summary["pct_menor_720"] * 100).round(1).astype(str) + "%"
+                    age_summary["pct_elegible"] = (age_summary["pct_elegible"] * 100).round(1).astype(str) + "%"
+                    age_summary["score_mediana"] = age_summary["score_mediana"].round(0).astype(int)
+                    age_summary["N"] = age_summary["N"].astype(int)
+                    age_summary = age_summary.rename(columns={
+                        "rango_edad": "Rango edad",
+                        "N": "Personas",
+                        "score_mediana": "Score mediana",
+                        "pct_score_0": "% Score=0",
+                        "pct_menor_720": "% <720",
+                        "pct_elegible": "% ≥720",
+                    })
+                    st.dataframe(age_summary, hide_index=True, use_container_width=True)
+                    st.caption(
+                        f"Dataset escriturados 2026: {len(age_df)} personas (iBuyer + Alianza, "
+                        "Inmobiliaria pendiente de procesar). Score=0 = sin vida crediticia en Experian."
+                    )
 
                 with st.expander("Tabla · resumen de deciles", expanded=False):
                     st.dataframe(
