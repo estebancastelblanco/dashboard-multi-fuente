@@ -69,6 +69,7 @@ st.markdown(
 UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERIAN_CSV_PATH = REPO_ROOT / "data" / "experian_check_executions_2026-05-15.csv"
+ESCRITURADOS_AGE_SCORE_PATH = REPO_ROOT / "data" / "escriturados_2026_age_score.csv"
 
 
 def _norm_phone(s: object) -> str:
@@ -312,6 +313,18 @@ def load_experian_scores() -> pd.DataFrame:
     return df[["document_id_norm", "score_crediticio", "execution_date"]]
 
 
+@st.cache_data(ttl=DAY, show_spinner="CSV · edades escriturados 2026…", persist="disk")
+def load_escriturados_age_score() -> pd.DataFrame:
+    if not ESCRITURADOS_AGE_SCORE_PATH.exists():
+        return pd.DataFrame(columns=["producto", "nid", "edad", "score_crediticio"])
+    df = pd.read_csv(ESCRITURADOS_AGE_SCORE_PATH)
+    if "edad" in df.columns:
+        df["edad"] = pd.to_numeric(df["edad"], errors="coerce")
+    if "score_crediticio" in df.columns:
+        df["score_crediticio"] = pd.to_numeric(df["score_crediticio"], errors="coerce")
+    return df.dropna(subset=["edad", "score_crediticio"]).copy()
+
+
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · desglose crediticio sellers…", persist="disk")
 def load_sellers_credit_breakdown(nids: tuple[int, ...]) -> pd.DataFrame:
     return bq_src.fetch_sellers_credit_breakdown(list(nids))
@@ -350,6 +363,7 @@ except Exception as exc:
 
 df_bq = load_landing_events()
 df_experian = load_experian_scores()
+df_escriturados_age = load_escriturados_age_score()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -717,15 +731,6 @@ n_aplica_sin_hip = int(
 )
 n_call_list = int((df_in["status"] == "aplica_pendiente_llamar").sum())
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.markdown(kpi_card("Universo HS", f"{n_universe:,}", "todos con flag_fakedoor"), unsafe_allow_html=True)
-c2.markdown(kpi_card("Leads T&C", n_leads, "firmaron formulario"), unsafe_allow_html=True)
-c3.markdown(kpi_card("Contactados", n_contactados, f"{n_contactados/max(1,n_leads):.0%}"), unsafe_allow_html=True)
-c4.markdown(kpi_card("Interés activo", n_interes, f"{n_interes/max(1,n_leads):.0%}"), unsafe_allow_html=True)
-c5.markdown(kpi_card("Elegibles", n_aplica, "score≥720"), unsafe_allow_html=True)
-c6.markdown(kpi_card("Por llamar", n_call_list, "call list activa"), unsafe_allow_html=True)
-st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
 
 
 
@@ -968,31 +973,116 @@ else:
                     st.plotly_chart(fig_dec, use_container_width=True)
             if summary_frames:
                 summary_all = pd.concat(summary_frames, ignore_index=True)
+                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                st.markdown(
+                    f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                    f"Edad vs score crediticio</h3>",
+                    unsafe_allow_html=True,
+                )
+
+                if df_escriturados_age.empty:
+                    st.info("Aún no hay dataset procesado de edades para los escriturados 2026.")
+                else:
+                    age_df = df_escriturados_age.copy()
+                    product_order_age = [p for p in product_order if p in set(age_df["producto"].astype(str))]
+                    corr = age_df["edad"].corr(age_df["score_crediticio"])
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.markdown(kpi_card("Personas", int(len(age_df)), "edad + score"), unsafe_allow_html=True)
+                    k2.markdown(kpi_card("Edad promedio", f"{age_df['edad'].mean():.1f}", "años"), unsafe_allow_html=True)
+                    k3.markdown(kpi_card("Score promedio", f"{age_df['score_crediticio'].mean():.0f}", "Experian"), unsafe_allow_html=True)
+                    k4.markdown(kpi_card("Correlación", f"{0.0 if pd.isna(corr) else corr:.2f}", "edad vs score"), unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+                    corr_left, corr_right = st.columns(2)
+                    with corr_left:
+                        fig_scatter = go.Figure()
+                        for producto in product_order_age:
+                            sub = age_df[age_df["producto"] == producto]
+                            fig_scatter.add_trace(go.Scatter(
+                                x=sub["edad"],
+                                y=sub["score_crediticio"],
+                                mode="markers",
+                                name=producto,
+                                opacity=0.7,
+                                marker=dict(size=8),
+                                hovertemplate=f"<b>{producto}</b><br>Edad: %{{x}}<br>Score: %{{y}}<extra></extra>",
+                            ))
+                            if len(sub) >= 2:
+                                x_vals = sub["edad"].astype(float).to_numpy()
+                                y_vals = sub["score_crediticio"].astype(float).to_numpy()
+                                coeff = pd.Series(y_vals).cov(pd.Series(x_vals)) / pd.Series(x_vals).var() if pd.Series(x_vals).var() else 0
+                                intercept = y_vals.mean() - coeff * x_vals.mean()
+                                x_line = sorted(set(x_vals))
+                                y_line = [coeff * x + intercept for x in x_line]
+                                fig_scatter.add_trace(go.Scatter(
+                                    x=x_line,
+                                    y=y_line,
+                                    mode="lines",
+                                    name=f"Tendencia {producto}",
+                                    showlegend=False,
+                                    line=dict(width=2, dash="dot"),
+                                ))
+                        fig_scatter.update_layout(
+                            paper_bgcolor=WHITE,
+                            plot_bgcolor=WHITE,
+                            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                            title=dict(text="Dispersión edad vs score", font=dict(size=13, color=DEEP)),
+                            xaxis=dict(title="Edad", gridcolor="#ede8f5"),
+                            yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                            height=380,
+                            margin=dict(l=10, r=10, t=40, b=10),
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+
+                    with corr_right:
+                        fig_heat = go.Figure(go.Histogram2d(
+                            x=age_df["edad"],
+                            y=age_df["score_crediticio"],
+                            colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
+                            nbinsx=16,
+                            nbinsy=16,
+                            hovertemplate="Edad %{x}<br>Score %{y}<br>N %{z}<extra></extra>",
+                        ))
+                        fig_heat.update_layout(
+                            paper_bgcolor=WHITE,
+                            plot_bgcolor=WHITE,
+                            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                            title=dict(text="Matriz de concentración", font=dict(size=13, color=DEEP)),
+                            xaxis=dict(title="Edad", gridcolor="#ede8f5"),
+                            yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                            height=380,
+                            margin=dict(l=10, r=10, t=40, b=10),
+                        )
+                        st.plotly_chart(fig_heat, use_container_width=True)
+
+                with st.expander("Tabla · resumen de deciles", expanded=False):
+                    st.dataframe(
+                        summary_all[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
+                        .rename(columns={
+                            "decil": "Decil",
+                            "count": "Cantidad",
+                            "avg_score": "Score promedio",
+                            "min_score": "Score mínimo",
+                            "max_score": "Score máximo",
+                        }),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+            with st.expander("Tabla · detalle de score crediticio", expanded=False):
                 st.dataframe(
-                    summary_all[["Producto", "decil", "count", "avg_score", "min_score", "max_score"]]
+                    credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
                     .rename(columns={
-                        "decil": "Decil",
-                        "count": "Cantidad",
-                        "avg_score": "Score promedio",
-                        "min_score": "Score mínimo",
-                        "max_score": "Score máximo",
+                        "nid": "NID",
+                        "producto": "Producto",
+                        "linea_negocio": "Línea de negocio",
+                        "cedula_cliente": "Cédula",
+                        "score_crediticio": "Score crediticio",
                     }),
                     hide_index=True,
                     use_container_width=True,
                 )
-
-            st.dataframe(
-                credit_join[["nid", "producto", "linea_negocio", "cedula_cliente", "score_crediticio"]]
-                .rename(columns={
-                    "nid": "NID",
-                    "producto": "Producto",
-                    "linea_negocio": "Línea de negocio",
-                    "cedula_cliente": "Cédula",
-                    "score_crediticio": "Score crediticio",
-                }),
-                hide_index=True,
-                use_container_width=True,
-            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
