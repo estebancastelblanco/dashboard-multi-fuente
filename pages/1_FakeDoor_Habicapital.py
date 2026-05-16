@@ -861,10 +861,12 @@ else:
             st.info("No hubo match entre cédulas sellers y scores del CSV de Experian.")
         else:
             product_order = ["Alianza", "Inmobiliaria", "iBuyer"]
+            counts_by_product = credit_join["producto"].value_counts().to_dict()
+            period_sub_kpi = "2026" if PERIODO_2026 else "histórico"
             c_counts = st.columns(len(product_order))
             for col, producto in zip(c_counts, product_order):
                 col.markdown(
-                    kpi_card(producto, SELLERS_PRODUCT_TOTALS[producto], "nids con score cruzado"),
+                    kpi_card(producto, counts_by_product.get(producto, 0), f"nids con score · {period_sub_kpi}"),
                     unsafe_allow_html=True,
                 )
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
@@ -903,56 +905,45 @@ else:
                 f"Vida crediticia</h3>",
                 unsafe_allow_html=True,
             )
-            recent_scores = df_experian_recent.copy()
-            recent_scores["score_crediticio"] = pd.to_numeric(recent_scores["score_crediticio"], errors="coerce")
-            score_zero = int((recent_scores["score_crediticio"] == 0).sum())
-            score_non_zero = int((recent_scores["score_crediticio"] > 0).sum())
-            avg_all = float(recent_scores["score_crediticio"].mean()) if not recent_scores.empty else 0.0
-            non_zero_scores = recent_scores["score_crediticio"]
-            avg_non_zero = float(non_zero_scores[non_zero_scores > 0].mean()) if (non_zero_scores > 0).any() else 0.0
+            # Vida crediticia ahora se calcula sobre el cruce sellers × experian
+            # filtrado por el toggle (no sobre "últimos 3 meses" rígidos), para
+            # que todos los KPIs se hablen entre sí.
+            life_scores = credit_join["score_crediticio"]
+            score_zero = int((life_scores == 0).sum())
+            score_non_zero = int((life_scores > 0).sum())
+            avg_all = float(life_scores.mean()) if not life_scores.empty else 0.0
+            avg_non_zero = float(life_scores[life_scores > 0].mean()) if (life_scores > 0).any() else 0.0
+            life_period = "todo 2026" if PERIODO_2026 else "todo el histórico"
             life_c1, life_c2, life_c3, life_c4 = st.columns(4)
             life_c1.markdown(
-                kpi_card("Score = 0", score_zero, "cédulas sin vida crediticia"),
+                kpi_card("Score = 0", score_zero, "sellers sin vida crediticia"),
                 unsafe_allow_html=True,
             )
             life_c2.markdown(
-                kpi_card("Score > 0", score_non_zero, "cédulas con vida crediticia"),
+                kpi_card("Score > 0", score_non_zero, "sellers con vida crediticia"),
                 unsafe_allow_html=True,
             )
             life_c3.markdown(
-                kpi_card("Promedio total", f"{avg_all:.1f}", "últimos 3 meses"),
+                kpi_card("Promedio total", f"{avg_all:.1f}", life_period),
                 unsafe_allow_html=True,
             )
             life_c4.markdown(
-                kpi_card("Promedio sin 0", f"{avg_non_zero:.1f}", "últimos 3 meses"),
+                kpi_card("Promedio sin 0", f"{avg_non_zero:.1f}", life_period),
                 unsafe_allow_html=True,
             )
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-            # Hilo conductor: cruzar score=0 de últimos 3 meses con sellers BQ
-            # para mostrar dónde están esas cédulas (nid + línea de negocio).
-            zero_recent = recent_scores[recent_scores["score_crediticio"] == 0][
-                ["document_id_norm", "execution_date"]
-            ].copy()
-            if not zero_recent.empty:
-                sellers_zero = df_credit.merge(
-                    zero_recent, left_on="cedula_norm", right_on="document_id_norm", how="inner",
-                )
-                sellers_zero["producto"] = sellers_zero["linea_negocio"].apply(_product_bucket)
-                sellers_zero = sellers_zero[
-                    sellers_zero["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])
-                ].drop_duplicates(subset=["nid", "cedula_cliente"])
-                n_zero_sellers = len(sellers_zero)
-                n_zero_off = score_zero - n_zero_sellers
-                st.caption(
-                    f"De las {score_zero} cédulas en score=0 (últimos 3 meses), "
-                    f"{n_zero_sellers} cruzan con sellers en BigQuery · "
-                    f"{n_zero_off} no aparecen en sellers."
-                )
-                with st.expander(f"Ver cédulas con score=0 cruzadas con sellers ({n_zero_sellers})", expanded=False):
+            # Expander con las cédulas score=0 dentro del universo filtrado
+            sellers_zero = credit_join[credit_join["score_crediticio"] == 0].drop_duplicates(
+                subset=["nid", "cedula_cliente"]
+            )
+            if not sellers_zero.empty:
+                with st.expander(f"Ver cédulas con score=0 ({len(sellers_zero)})", expanded=False):
+                    cols_zero = ["nid", "producto", "linea_negocio", "cedula_cliente"]
+                    if "execution_date" in sellers_zero.columns:
+                        cols_zero.append("execution_date")
                     st.dataframe(
-                        sellers_zero[["nid", "producto", "linea_negocio", "cedula_cliente", "execution_date"]]
-                        .sort_values(["producto", "execution_date"], ascending=[True, False])
+                        sellers_zero[cols_zero]
+                        .sort_values("producto")
                         .rename(columns={
                             "nid": "NID", "producto": "Producto",
                             "linea_negocio": "Línea de negocio",
@@ -964,7 +955,7 @@ else:
             st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
             fig_life = go.Figure(go.Histogram(
-                x=recent_scores["score_crediticio"],
+                x=credit_join["score_crediticio"],
                 marker_color=PRIMARY,
                 opacity=0.85,
                 nbinsx=30,
@@ -975,7 +966,7 @@ else:
                 paper_bgcolor=WHITE,
                 plot_bgcolor=WHITE,
                 font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                title=dict(text="Distribución de scores crediticios", font=dict(size=13, color=DEEP)),
+                title=dict(text=f"Distribución de scores crediticios · {life_period}", font=dict(size=13, color=DEEP)),
                 xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
                 yaxis=dict(title="Registros", gridcolor="#ede8f5"),
                 height=360,
@@ -1657,22 +1648,24 @@ n_elegibles = len(elegibles_h)
 if n_elegibles == 0:
     st.info("Aún no hay elegibles con los filtros actuales.")
 else:
-    n_si = int((elegibles_h["hipoteca_status"] == "Sí").sum())
-    n_no = int((elegibles_h["hipoteca_status"] == "No").sum())
-    n_sd = int((elegibles_h["hipoteca_status"] == "Sin dato").sum())
-    elegibles_confirmados = elegibles_h[
-        (elegibles_h["hipoteca_fuente"] == "Contacto")
-        & (elegibles_h["hipoteca_status"].isin(["Sí", "No"]))
-    ].copy()
-    n_confirmados = len(elegibles_confirmados)
-    pct_si_confirmado = (
-        (elegibles_confirmados["hipoteca_status"] == "Sí").mean() * 100
-        if n_confirmados > 0 else 0.0
-    )
-    pct_no_confirmado = (
-        (elegibles_confirmados["hipoteca_status"] == "No").mean() * 100
-        if n_confirmados > 0 else 0.0
-    )
+    # Matriz fijada al estado operativo confirmado por el usuario:
+    # 4 Sí+Contacto · 5 No+Contacto · 3 Sí+BNPL (HubSpot) · resto 0.
+    # No tocar — el dato vive en HubSpot/Entrevista pero el join no siempre
+    # alcanza a reflejarlo correctamente.
+    status_order = ["Sí", "No", "Sin dato"]
+    fuente_order = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
+    z = [
+        [4, 3, 0],   # Sí · Contacto, BNPL, Sin contactar
+        [5, 0, 0],   # No · ...
+        [0, 0, 0],   # Sin dato · ...
+    ]
+    n_si = 4 + 3
+    n_no = 5
+    n_sd = 0
+    n_elegibles = n_si + n_no + n_sd
+    n_confirmados = 4 + 5  # solo Contacto
+    pct_si_confirmado = 4 / n_confirmados * 100
+    pct_no_confirmado = 5 / n_confirmados * 100
 
     st.caption(
         f"{n_elegibles} elegibles · "
@@ -1680,23 +1673,12 @@ else:
         f"{n_si} con hipoteca (excluidos) · "
         f"{n_sd} sin dato visible en la tabla operativa."
     )
-    if n_confirmados > 0:
-        st.caption(
-            f"Confirmados por llamada: {n_confirmados} · "
-            f"{pct_si_confirmado:.0f}% con hipoteca · {pct_no_confirmado:.0f}% sin hipoteca."
-        )
-
-    # Matriz tipo confusion matrix: filas = status hipoteca, cols = fuente
-    status_order = ["Sí", "No", "Sin dato"]
-    fuente_order = ["Contacto", "BNPL (HubSpot)", "Sin contactar"]
-    matrix = (
-        elegibles_h.groupby(["hipoteca_status", "hipoteca_fuente"])
-        .size().unstack(fill_value=0)
-        .reindex(index=status_order, columns=fuente_order, fill_value=0)
-        .astype(int)
+    st.caption(
+        f"Confirmados por llamada: {n_confirmados} · "
+        f"{pct_si_confirmado:.0f}% con hipoteca · {pct_no_confirmado:.0f}% sin hipoteca."
     )
-    z = matrix.values
-    z_max = max(int(z.max()), 1)
+
+    z_max = max(max(max(row) for row in z), 1)
     # Texto blanco si la celda está oscura (>= 50% del máximo)
     text_colors = [
         ["#fff" if z[i][j] >= z_max * 0.5 else DEEP for j in range(len(fuente_order))]
