@@ -892,33 +892,27 @@ else:
                 f"Vida crediticia</h3>",
                 unsafe_allow_html=True,
             )
-            no_credit_cols = st.columns(len(product_order))
-            for col, producto in zip(no_credit_cols, product_order):
-                sub = credit_join[credit_join["producto"] == producto].copy()
-                score_zero = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") == 0).sum())
-                score_non_zero = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") > 0).sum())
-                col.markdown(
-                    kpi_card("Score = 0", score_zero, f"{producto} · sin vida crediticia"),
-                    unsafe_allow_html=True,
-                )
-                col.markdown(
-                    kpi_card("Score > 0", score_non_zero, f"{producto} · con vida crediticia"),
-                    unsafe_allow_html=True,
-                )
+            score_zero = int((pd.to_numeric(credit_join["score_crediticio"], errors="coerce") == 0).sum())
+            score_non_zero = int((pd.to_numeric(credit_join["score_crediticio"], errors="coerce") > 0).sum())
+            life_c1, life_c2 = st.columns(2)
+            life_c1.markdown(
+                kpi_card("Score = 0", score_zero, "sin vida crediticia"),
+                unsafe_allow_html=True,
+            )
+            life_c2.markdown(
+                kpi_card("Score > 0", score_non_zero, "con vida crediticia"),
+                unsafe_allow_html=True,
+            )
 
-            fig_life = go.Figure()
-            for producto in product_order:
-                sub = credit_join[credit_join["producto"] == producto].copy()
-                if sub.empty:
-                    continue
-                fig_life.add_trace(go.Histogram(
-                    x=sub["score_crediticio"],
-                    name=producto,
-                    opacity=0.72,
-                    nbinsx=30,
-                ))
+            fig_life = go.Figure(go.Histogram(
+                x=credit_join["score_crediticio"],
+                marker_color=PRIMARY,
+                opacity=0.85,
+                nbinsx=30,
+                hovertemplate="Score %{x}<br>Registros %{y}<extra></extra>",
+                showlegend=False,
+            ))
             fig_life.update_layout(
-                barmode="overlay",
                 paper_bgcolor=WHITE,
                 plot_bgcolor=WHITE,
                 font=dict(family="Inter, sans-serif", color=DEEP, size=11),
