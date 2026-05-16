@@ -658,43 +658,7 @@ hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
 hip.columns = ["hipoteca_status", "hipoteca_fuente"]
 df_in = pd.concat([df_in, hip], axis=1)
 
-# Cierre operativo de hipoteca para elegibles:
-# 1) Se preservan los casos confirmados por BNPL.
-# 2) El resto del universo elegible se cierra como contacto para no dejar
-#    sin dato en la lectura operativa actual.
-elegibles_idx = df_in[df_in["aplica"].astype(str).str.lower() == "si"].index.tolist()
-bnpl_yes_idx = [
-    idx for idx in elegibles_idx
-    if df_in.at[idx, "hipoteca_fuente"] == "BNPL (HubSpot)"
-    and df_in.at[idx, "hipoteca_status"] == "Sí"
-]
-remaining_idx = [idx for idx in elegibles_idx if idx not in bnpl_yes_idx]
-
-def _score_sort_key(idx: int) -> tuple[int, float]:
-    current_status = df_in.at[idx, "hipoteca_status"]
-    current_source = df_in.at[idx, "hipoteca_fuente"]
-    score = pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
-    score_val = float(score) if not pd.isna(score) else -1.0
-    if current_source == "Contacto" and current_status == "Sí":
-        priority = 0
-    elif current_source == "Contacto" and current_status == "No":
-        priority = 1
-    else:
-        priority = 2
-    return priority, -score_val
-
-remaining_idx = sorted(remaining_idx, key=_score_sort_key)
-target_yes_contact = min(4, len(remaining_idx))
-yes_contact_idx = set(remaining_idx[:target_yes_contact])
-for idx in remaining_idx:
-    if idx in yes_contact_idx:
-        df_in.at[idx, "hipoteca_status"] = "Sí"
-        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
-    else:
-        df_in.at[idx, "hipoteca_status"] = "No"
-        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
-
-# Si la fuente de hipoteca ya quedó cerrada por voz/contacto, el lead deja de
+# Si la fuente de hipoteca quedó cerrada por voz/contacto, el lead deja de
 # ser "sin contactar" para priorización y matriz.
 df_in.loc[df_in["hipoteca_fuente"] == "Contacto", "contactado"] = True
 df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
@@ -851,10 +815,22 @@ st.plotly_chart(fig_funnel, use_container_width=True)
 # Desglose crediticio sellers
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Desgloce crediticio sellers</h2>", unsafe_allow_html=True)
-st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-if df_experian.empty:
-    st.info("No se encontró el CSV de Experian con scores crediticios.")
+# Filtro de período: histórico completo o solo 2026
+sel_periodo_credito = st.radio(
+    "Periodo",
+    ["Todo el histórico", "Solo 2026"],
+    index=0,
+    horizontal=True,
+    key="periodo_credito",
+    label_visibility="collapsed",
+)
+PERIODO_2026 = sel_periodo_credito == "Solo 2026"
+df_exp_active = df_experian_2026 if PERIODO_2026 else df_experian
+st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+if df_exp_active.empty:
+    st.info("No se encontró el CSV de Experian con scores crediticios para el período seleccionado.")
 else:
     try:
         df_credit = load_sellers_credit_breakdown(tuple())
@@ -867,7 +843,7 @@ else:
     else:
         df_credit["cedula_norm"] = df_credit["cedula_cliente"].apply(_norm_doc_id)
         credit_join_all = df_credit.merge(
-            df_experian,
+            df_exp_active,
             left_on="cedula_norm",
             right_on="document_id_norm",
             how="left",
@@ -1008,17 +984,22 @@ else:
             st.plotly_chart(fig_life, use_container_width=True)
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
+            above_720_counts = (
+                credit_join[credit_join["score_crediticio"] >= 720]["producto"]
+                .value_counts().to_dict()
+            )
             score_cols = st.columns(len(product_order))
+            period_sub = "2026" if PERIODO_2026 else "histórico"
             for col, producto in zip(score_cols, product_order):
                 col.markdown(
-                    kpi_card("Score > 720", SELLERS_PRODUCT_ABOVE_720[producto], f"{producto}"),
+                    kpi_card("Score > 720", above_720_counts.get(producto, 0), f"{producto} · {period_sub}"),
                     unsafe_allow_html=True,
                 )
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
             st.markdown(
                 f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
-                f"Distribución por deciles de score · general (todo el histórico)</h3>",
+                f"Distribución por deciles de score</h3>",
                 unsafe_allow_html=True,
             )
             decile_cols = st.columns(3)
@@ -1101,105 +1082,21 @@ else:
                 with col:
                     st.plotly_chart(fig_dec, use_container_width=True)
 
-            # Segunda fila: deciles filtrados por execution_date año 2026
-            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
-                f"Distribución por deciles de score · solo 2026</h3>",
-                unsafe_allow_html=True,
-            )
-            if df_experian_2026.empty:
-                st.info("No hay scores con execution_date en 2026.")
-            else:
-                credit_join_26 = df_credit.merge(
-                    df_experian_2026,
-                    left_on="cedula_norm",
-                    right_on="document_id_norm",
-                    how="inner",
-                )
-                credit_join_26["score_crediticio"] = credit_join_26["score_crediticio"].astype(int)
-                credit_join_26["producto"] = credit_join_26["linea_negocio"].apply(_product_bucket)
-                credit_join_26 = credit_join_26[
-                    credit_join_26["producto"].isin(["iBuyer", "Alianza", "Inmobiliaria"])
-                ].copy()
-
-                decile_cols_26 = st.columns(3)
-                summary_frames_26: list[pd.DataFrame] = []
-                for col, producto in zip(decile_cols_26, product_order):
-                    sub = credit_join_26[credit_join_26["producto"] == producto].copy()
-                    summary = _decil_summary(sub)
-                    if summary.empty:
-                        with col:
-                            st.info(f"Sin datos 2026 para {producto}.")
-                        continue
-                    summary["Producto"] = producto
-                    summary_frames_26.append(summary.copy())
-                    colors_26 = [
-                        "#c2410c", "#ea580c", "#f97316", "#f59e0b", "#eab308",
-                        "#84cc16", "#65a30d", "#16a34a", "#15803d", "#166534",
-                    ][:len(summary)]
-                    y_labels = summary["decil"].iloc[::-1]
-                    mins = summary["min_score"].iloc[::-1]
-                    maxs = summary["max_score"].iloc[::-1]
-                    avgs = summary["avg_score"].iloc[::-1]
-                    counts_d = summary["count"].iloc[::-1]
-                    fig_dec_26 = go.Figure()
-                    fig_dec_26.add_trace(go.Bar(
-                        x=(maxs - mins), y=y_labels, base=mins, orientation="h",
-                        marker=dict(color=colors_26[::-1], line=dict(color=DEEP, width=1)),
-                        hovertemplate="<b>%{y}</b><br>Rango: %{base:.0f} - %{x:+.0f}<extra></extra>",
-                        showlegend=False,
-                    ))
-                    fig_dec_26.add_trace(go.Scatter(
-                        x=avgs, y=y_labels, mode="markers",
-                        marker=dict(color="black", size=8),
-                        hovertemplate="<b>%{y}</b><br>Promedio: %{x:.1f}<extra></extra>",
-                        showlegend=False,
-                    ))
-                    for decil, min_s, max_s, avg_s, count_s in zip(y_labels, mins, maxs, avgs, counts_d):
-                        fig_dec_26.add_annotation(
-                            x=(min_s + max_s) / 2, y=decil, text=f"n={int(count_s)}",
-                            showarrow=False, font=dict(size=10, color=DEEP),
-                            bgcolor="rgba(255,255,255,0.8)",
-                        )
-                        fig_dec_26.add_annotation(
-                            x=min_s, y=decil, text=f"{int(min_s)}",
-                            showarrow=False, xanchor="right", xshift=-8,
-                            font=dict(size=9, color=DEEP),
-                        )
-                        fig_dec_26.add_annotation(
-                            x=max_s, y=decil, text=f"{int(max_s)}",
-                            showarrow=False, xanchor="left", xshift=8,
-                            font=dict(size=9, color=DEEP),
-                        )
-                    fig_dec_26.update_layout(
-                        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-                        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                        title=dict(text=f"{producto} · 2026", font=dict(size=13, color=DEEP)),
-                        height=420, margin=dict(l=10, r=10, t=40, b=10),
-                        xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                        yaxis=dict(title="Decil", categoryorder="array", categoryarray=list(y_labels)),
-                    )
-                    with col:
-                        st.plotly_chart(fig_dec_26, use_container_width=True)
-                st.caption(
-                    f"Filtro 2026: última consulta por cédula con `execution_date` en 2026. "
-                    f"Match en sellers BQ: {len(credit_join_26):,} cédulas."
-                )
-
             if summary_frames:
                 summary_all = pd.concat(summary_frames, ignore_index=True)
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-                st.markdown(
-                    f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
-                    f"Edad vs score crediticio</h3>",
-                    unsafe_allow_html=True,
-                )
-
-                if df_escriturados_age.empty:
-                    st.info("Aún no hay dataset procesado de edades para los escriturados 2026.")
+                if not PERIODO_2026:
+                    pass  # "Edad vs score" solo aparece en modo 2026 (dataset es solo 2026)
                 else:
+                    st.markdown(
+                        f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                        f"Edad vs score crediticio</h3>",
+                        unsafe_allow_html=True,
+                    )
+                if PERIODO_2026 and df_escriturados_age.empty:
+                    st.info("Aún no hay dataset procesado de edades para los escriturados 2026.")
+                elif PERIODO_2026:
                     age_df = df_escriturados_age.copy()
                     product_order_age = [p for p in product_order if p in set(age_df["producto"].astype(str))]
                     corr = age_df["edad"].corr(age_df["score_crediticio"])
