@@ -22,3 +22,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Cache intermedio del extractor de cédulas (contiene URLs firmadas + PII)
+data/escriturados_2026_extracted_cache.csv

@@ -895,14 +895,6 @@ else:
             st.plotly_chart(fig_credit, use_container_width=True)
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-            score_cols = st.columns(len(product_order))
-            for col, producto in zip(score_cols, product_order):
-                col.markdown(
-                    kpi_card("Score > 720", SELLERS_PRODUCT_ABOVE_720[producto], f"{producto}"),
-                    unsafe_allow_html=True,
-                )
-            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
             st.markdown(
                 f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
                 f"Vida crediticia</h3>",
@@ -931,6 +923,7 @@ else:
                 kpi_card("Promedio sin 0", f"{avg_non_zero:.1f}", "últimos 3 meses"),
                 unsafe_allow_html=True,
             )
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
 
             fig_life = go.Figure(go.Histogram(
                 x=recent_scores["score_crediticio"],
@@ -951,6 +944,14 @@ else:
                 margin=dict(l=10, r=10, t=44, b=10),
             )
             st.plotly_chart(fig_life, use_container_width=True)
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            score_cols = st.columns(len(product_order))
+            for col, producto in zip(score_cols, product_order):
+                col.markdown(
+                    kpi_card("Score > 720", SELLERS_PRODUCT_ABOVE_720[producto], f"{producto}"),
+                    unsafe_allow_html=True,
+                )
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
             st.markdown(
