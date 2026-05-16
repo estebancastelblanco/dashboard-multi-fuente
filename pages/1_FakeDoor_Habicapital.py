@@ -313,6 +313,21 @@ def load_experian_scores() -> pd.DataFrame:
     return df[["document_id_norm", "score_crediticio", "execution_date"]]
 
 
+@st.cache_data(ttl=DAY, show_spinner="CSV · vida crediticia 3 meses…", persist="disk")
+def load_experian_recent_scores(months: int = 3) -> pd.DataFrame:
+    if not EXPERIAN_CSV_PATH.exists():
+        return pd.DataFrame(columns=["score_crediticio", "execution_date"])
+    df = pd.read_csv(
+        EXPERIAN_CSV_PATH,
+        usecols=["experian_response.score", "execution_date"],
+    )
+    df["score_crediticio"] = pd.to_numeric(df["experian_response.score"], errors="coerce")
+    df["execution_date"] = pd.to_datetime(df["execution_date"], errors="coerce", utc=True)
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.DateOffset(months=months)
+    df = df[df["score_crediticio"].notna() & (df["execution_date"] >= cutoff)].copy()
+    return df[["score_crediticio", "execution_date"]]
+
+
 @st.cache_data(ttl=DAY, show_spinner="CSV · edades escriturados 2026…", persist="disk")
 def load_escriturados_age_score() -> pd.DataFrame:
     if not ESCRITURADOS_AGE_SCORE_PATH.exists():
@@ -363,6 +378,7 @@ except Exception as exc:
 
 df_bq = load_landing_events()
 df_experian = load_experian_scores()
+df_experian_recent = load_experian_recent_scores()
 df_escriturados_age = load_escriturados_age_score()
 
 
@@ -892,9 +908,13 @@ else:
                 f"Vida crediticia</h3>",
                 unsafe_allow_html=True,
             )
-            score_zero = int((pd.to_numeric(credit_join["score_crediticio"], errors="coerce") == 0).sum())
-            score_non_zero = int((pd.to_numeric(credit_join["score_crediticio"], errors="coerce") > 0).sum())
-            life_c1, life_c2 = st.columns(2)
+            recent_scores = df_experian_recent.copy()
+            score_zero = int((pd.to_numeric(recent_scores["score_crediticio"], errors="coerce") == 0).sum())
+            score_non_zero = int((pd.to_numeric(recent_scores["score_crediticio"], errors="coerce") > 0).sum())
+            avg_all = float(pd.to_numeric(recent_scores["score_crediticio"], errors="coerce").mean()) if not recent_scores.empty else 0.0
+            non_zero_scores = pd.to_numeric(recent_scores["score_crediticio"], errors="coerce")
+            avg_non_zero = float(non_zero_scores[non_zero_scores > 0].mean()) if (non_zero_scores > 0).any() else 0.0
+            life_c1, life_c2, life_c3, life_c4 = st.columns(4)
             life_c1.markdown(
                 kpi_card("Score = 0", score_zero, "sin vida crediticia"),
                 unsafe_allow_html=True,
@@ -903,9 +923,17 @@ else:
                 kpi_card("Score > 0", score_non_zero, "con vida crediticia"),
                 unsafe_allow_html=True,
             )
+            life_c3.markdown(
+                kpi_card("Promedio total", f"{avg_all:.1f}", "últimos 3 meses"),
+                unsafe_allow_html=True,
+            )
+            life_c4.markdown(
+                kpi_card("Promedio sin 0", f"{avg_non_zero:.1f}", "últimos 3 meses"),
+                unsafe_allow_html=True,
+            )
 
             fig_life = go.Figure(go.Histogram(
-                x=credit_join["score_crediticio"],
+                x=recent_scores["score_crediticio"],
                 marker_color=PRIMARY,
                 opacity=0.85,
                 nbinsx=30,
