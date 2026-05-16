@@ -889,6 +889,50 @@ else:
 
             st.markdown(
                 f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
+                f"Vida crediticia</h3>",
+                unsafe_allow_html=True,
+            )
+            no_credit_cols = st.columns(len(product_order))
+            for col, producto in zip(no_credit_cols, product_order):
+                sub = credit_join[credit_join["producto"] == producto].copy()
+                score_zero = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") == 0).sum())
+                score_non_zero = int((pd.to_numeric(sub["score_crediticio"], errors="coerce") > 0).sum())
+                col.markdown(
+                    kpi_card("Score = 0", score_zero, f"{producto} · sin vida crediticia"),
+                    unsafe_allow_html=True,
+                )
+                col.markdown(
+                    kpi_card("Score > 0", score_non_zero, f"{producto} · con vida crediticia"),
+                    unsafe_allow_html=True,
+                )
+
+            fig_life = go.Figure()
+            for producto in product_order:
+                sub = credit_join[credit_join["producto"] == producto].copy()
+                if sub.empty:
+                    continue
+                fig_life.add_trace(go.Histogram(
+                    x=sub["score_crediticio"],
+                    name=producto,
+                    opacity=0.72,
+                    nbinsx=30,
+                ))
+            fig_life.update_layout(
+                barmode="overlay",
+                paper_bgcolor=WHITE,
+                plot_bgcolor=WHITE,
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                title=dict(text="Distribución de scores crediticios", font=dict(size=13, color=DEEP)),
+                xaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
+                yaxis=dict(title="Registros", gridcolor="#ede8f5"),
+                height=360,
+                margin=dict(l=10, r=10, t=44, b=10),
+            )
+            st.plotly_chart(fig_life, use_container_width=True)
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+            st.markdown(
+                f"<h3 style='color:{DEEP};font-size:1rem;margin:14px 0 6px 0'>"
                 f"Distribución por deciles de score</h3>",
                 unsafe_allow_html=True,
             )
