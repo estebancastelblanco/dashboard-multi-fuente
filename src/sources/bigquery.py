@@ -246,18 +246,23 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
     ),
     base_hubspot AS (
       SELECT
-        CAST(nid AS INT64) AS nid,
-        abc_test_landing_co,
-        ab_test_landing,
-        LOWER(deal_uuid) AS deal_uuid,
-        pipeline,
-        SAFE_CAST(valor_negociado AS FLOAT64) AS valor_negociado,
-        SAFE_CAST(ask_price AS FLOAT64)       AS customer_price,
-        SAFE_CAST(precio_ancla AS FLOAT64)    AS precio_ancla_hs,
-        SAFE_CAST(oferta_final_prestamo_mx_calculada AS FLOAT64) AS oferta_final_calculada
-      FROM `sellers-main-prod.hubspot.deals`
-      WHERE abc_test_landing_co IS NOT NULL
-        AND country = 'México'
+        CAST(d.nid AS INT64) AS nid,
+        d.abc_test_landing_co,
+        d.ab_test_landing,
+        LOWER(d.deal_uuid) AS deal_uuid,
+        d.pipeline,
+        d.hubspot_owner_id,
+        TRIM(CONCAT(IFNULL(o.first_name,''), ' ', IFNULL(o.last_name,''))) AS owner_name,
+        SAFE_CAST(d.valor_negociado AS FLOAT64) AS valor_negociado,
+        SAFE_CAST(d.ask_price AS FLOAT64)       AS customer_price,
+        SAFE_CAST(d.precio_ancla AS FLOAT64)    AS precio_ancla_hs,
+        SAFE_CAST(d.oferta_final_prestamo_mx_calculada AS FLOAT64) AS oferta_final_calculada
+      FROM `sellers-main-prod.hubspot.deals` d
+      LEFT JOIN `sellers-main-prod.hubspot.owners` o
+        ON LOWER(o.email) = LOWER(d.hubspot_owner_id)
+        OR CAST(o.id AS STRING) = CAST(d.hubspot_owner_id AS STRING)
+      WHERE d.abc_test_landing_co IS NOT NULL
+        AND d.country = 'México'
     ),
     pasaron_ofertados AS (
       SELECT
@@ -281,6 +286,8 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       hs.ab_test_landing,
       hs.deal_uuid,
       hs.pipeline,
+      hs.hubspot_owner_id,
+      hs.owner_name,
       o.equipo_sellers,
       o.estado_aprobado,
       o.fecha_aprobado,

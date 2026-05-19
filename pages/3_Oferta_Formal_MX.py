@@ -59,8 +59,8 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_oferta_formal_data_v3() -> pd.DataFrame:
-    """v3: agrega columna pipeline desde hubspot.deals."""
+def load_oferta_formal_data_v4() -> pd.DataFrame:
+    """v4: agrega hubspot_owner_id + owner_name (LEFT JOIN owners)."""
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -70,7 +70,7 @@ def load_oferta_formal_data_v3() -> pd.DataFrame:
 
 
 # Alias para retro-compat con resto del código
-load_abc_data = load_oferta_formal_data_v3
+load_abc_data = load_oferta_formal_data_v4
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
@@ -750,6 +750,8 @@ show_cols = [
     ("abc_test_landing_co", "abc_test_landing_co"),
     ("nid", "nid"),
     ("equipo_sellers", "equipo_sellers"),
+    ("hubspot_owner_id", "hubspot_owner_id"),
+    ("owner_name", "Propietario"),
     ("estado_aprobado", "estado_aprobado"),
     ("fecha_aprobado", "fecha_aprobado"),
     ("Cierre", "Cierre"),
@@ -787,6 +789,133 @@ def _color_aperturas(v):
 
 styled = table_view.style.map(_color_aperturas, subset=["Veces abrió landing"])
 st.dataframe(styled, hide_index=True, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sección 5 · Matriz por propietario del negocio
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Matriz por propietario</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+# Universo: deals del Desglose (df_apro, ya filtrado por sidebar)
+if df_apro.empty:
+    st.info("Sin deals para el filtro actual.")
+else:
+    owners_base = df_apro.drop_duplicates("nid").copy()
+    owners_base["owner_id"] = owners_base["hubspot_owner_id"].astype(str)
+    owners_base["owner_label"] = (
+        owners_base["owner_name"].fillna("").astype(str).str.strip()
+        .replace("", None)
+        .fillna(owners_base["owner_id"])
+    )
+    owners_base.loc[owners_base["owner_id"].isin(["", "nan", "None", "NaN"]),
+                    "owner_label"] = "(sin propietario)"
+
+    # Cruces con eventos / sheet
+    deal_uuid_lower = df_apro["deal_uuid"].astype(str).str.lower()
+    uuid_to_owner = dict(zip(deal_uuid_lower, owners_base.set_index("nid").loc[
+        df_apro["nid"].map(lambda x: x if x in owners_base["nid"].values else None).dropna()
+    ]["owner_label"].values if not owners_base.empty else []))
+
+    # Forma más simple: agrupar manualmente
+    owner_rows = []
+    for owner_label, g_own in owners_base.groupby("owner_label"):
+        nids = g_own["nid"].tolist()
+        uuids = set(g_own["deal_uuid"].dropna().astype(str).str.lower())
+        n_negocios = len(g_own)
+        # cuántos UUIDs abrieron (al menos 1 evento page en BQ)
+        if not df_events.empty:
+            n_abrieron = int(df_events[df_events["uuid"].isin(uuids)]["uuid"].nunique())
+            n_interacciones = int(df_events[df_events["uuid"].isin(uuids)]["events"].sum())
+        else:
+            n_abrieron = 0
+            n_interacciones = 0
+        owner_rows.append({
+            "Propietario": owner_label,
+            "Negocios con landing": n_negocios,
+            "Abrieron landing": n_abrieron,
+            "Interacciones": n_interacciones,
+            "% abrió": round(n_abrieron / n_negocios * 100, 1) if n_negocios else 0.0,
+        })
+
+    matriz = pd.DataFrame(owner_rows).sort_values("Negocios con landing", ascending=False)
+    matriz.reset_index(drop=True, inplace=True)
+
+    if matriz.empty:
+        st.info("Sin propietarios para el filtro actual.")
+    else:
+        # Coloreo verde (bueno) → rojo (malo) por % abrió
+        def _color_pct(val):
+            try:
+                p = float(val)
+            except Exception:
+                return ""
+            # Verde si >50%, amarillo 25-50%, rojo <25%
+            if p >= 50:
+                return "background-color:#16a34a;color:#fff;font-weight:600"
+            if p >= 25:
+                return "background-color:#f59e0b;color:#fff;font-weight:600"
+            return "background-color:#dc2626;color:#fff;font-weight:600"
+
+        # Color por cantidad de interacciones: gradiente PALE→PRIMARY
+        max_int = max(int(matriz["Interacciones"].max()), 1)
+
+        def _color_interacciones(val):
+            try:
+                n = int(val)
+            except Exception:
+                return ""
+            if n == 0:
+                return "background-color:#fef2f2;color:#7f1d1d"
+            ratio = min(n / max_int, 1.0)
+            # Interpolar PALE (#E0AAFF) → PRIMARY (#4A148C)
+            r = int(224 + (74 - 224) * ratio)
+            g = int(170 + (20 - 170) * ratio)
+            b = int(255 + (140 - 255) * ratio)
+            text = "#fff" if ratio > 0.5 else "#222"
+            return f"background-color:rgb({r},{g},{b});color:{text};font-weight:600"
+
+        # Color por # abrieron (verde si > 0, escala con max_abrieron)
+        max_abr = max(int(matriz["Abrieron landing"].max()), 1)
+
+        def _color_abrieron(val):
+            try:
+                n = int(val)
+            except Exception:
+                return ""
+            if n == 0:
+                return "background-color:#fef2f2;color:#7f1d1d"
+            ratio = min(n / max_abr, 1.0)
+            # rojo → verde
+            if ratio < 0.5:
+                t = ratio / 0.5
+                r = int(220 - (220 - 245) * t)
+                g = int(38 + (158 - 38) * t)
+                b = int(38 + (11 - 38) * t)
+            else:
+                t = (ratio - 0.5) / 0.5
+                r = int(245 - (245 - 22) * t)
+                g = int(158 + (163 - 158) * t)
+                b = int(11 + (74 - 11) * t)
+            text = "#fff" if ratio > 0.4 else "#222"
+            return f"background-color:rgb({r},{g},{b});color:{text};font-weight:600"
+
+        styled_matriz = (
+            matriz.style
+            .map(_color_abrieron, subset=["Abrieron landing"])
+            .map(_color_interacciones, subset=["Interacciones"])
+            .map(_color_pct, subset=["% abrió"])
+            .format({"% abrió": "{:.1f}%"})
+        )
+        st.dataframe(styled_matriz, hide_index=True, use_container_width=True)
+        st.caption(
+            f"{len(matriz)} propietarios · "
+            f"{int(matriz['Negocios con landing'].sum())} negocios totales · "
+            f"{int(matriz['Abrieron landing'].sum())} abrieron · "
+            f"{int(matriz['Interacciones'].sum())} interacciones (page views)."
+        )
+
 
 st.divider()
 st.caption(
