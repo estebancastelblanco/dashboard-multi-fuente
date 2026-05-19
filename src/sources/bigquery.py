@@ -328,6 +328,27 @@ def fetch_oferta_formal_envios_wa() -> pd.DataFrame:
     return df
 
 
+def fetch_oferta_formal_landing_tracks() -> pd.DataFrame:
+    """Eventos individuales (Segment tracks) en ofertas.tuhabi.mx.
+
+    Devuelve un row por evento disparado con uuid, event_name y timestamp.
+    """
+    sql = r"""
+    SELECT
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
+      event AS event_name,
+      timestamp
+    FROM `sellers-main-prod.javascript9.tracks`
+    WHERE context_page_url LIKE 'https://ofertas.tuhabi.mx/%'
+      AND event IS NOT NULL
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["uuid"] = df["uuid"].astype(str).str.lower()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    return df
+
+
 def fetch_oferta_formal_landing_events() -> pd.DataFrame:
     """Eventos de página en https://ofertas.tuhabi.mx/<uuid>.
 

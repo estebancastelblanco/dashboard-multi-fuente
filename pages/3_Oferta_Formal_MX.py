@@ -83,6 +83,16 @@ def load_landing_events() -> pd.DataFrame:
         return pd.DataFrame(columns=["uuid", "events", "first_seen", "last_seen"])
 
 
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos Segment landing…", persist="disk")
+def load_landing_tracks() -> pd.DataFrame:
+    """Eventos individuales (Segment tracks) en ofertas.tuhabi.mx."""
+    try:
+        return bq_src.fetch_oferta_formal_landing_tracks()
+    except Exception as exc:
+        st.warning(f"BigQuery tracks: {type(exc).__name__}: {exc}")
+        return pd.DataFrame(columns=["uuid", "event_name", "timestamp"])
+
+
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · envíos WhatsApp…", persist="disk")
 def load_envios_wa() -> pd.DataFrame:
     """Envíos de WhatsApp del template de Oferta formal MX."""
@@ -167,7 +177,7 @@ df.loc[df["abc_test_landing_co"].astype(str).str.strip() == "", "abc_test_landin
 with st.sidebar:
     if st.button("Actualizar datos", use_container_width=True,
                  help="Refresca el cache de BigQuery."):
-        for loader in (load_abc_data, load_landing_events, load_landing_logs, load_envios_wa):
+        for loader in (load_abc_data, load_landing_events, load_landing_logs, load_envios_wa, load_landing_tracks):
             try:
                 loader.clear()
             except Exception:
@@ -573,57 +583,123 @@ fig_funnel.update_layout(
 st.plotly_chart(fig_funnel, use_container_width=True, key="funnel_landing")
 
 
-# KPIs y distribución de aperturas por UUID
+# Análisis de eventos Segment de la landing
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-st.markdown("<h2>Interacciones por cliente</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Comportamiento en la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# Interacciones desde el Sheet LOGS (cada fila = 1 interacción registrada).
-# Filtramos a UUIDs del universo con variante A/B/C.
-if df_logs.empty or not universe_uuids_abc:
-    st.info("Sin interacciones en el Sheet para el universo seleccionado.")
+df_tracks = load_landing_tracks()
+
+if df_tracks.empty or not universe_uuids_abc:
+    st.info("Sin eventos Segment para el universo seleccionado.")
 else:
-    logs_universe = df_logs[df_logs["uuid"].isin(universe_uuids_abc)]
-    counts_per_uuid = logs_universe["uuid"].value_counts()
-    n_uuids = int(len(counts_per_uuid))
-    n_total = int(counts_per_uuid.sum())
-    k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(kpi_card("UUIDs con interacciones", n_uuids,
-                         "aparecen al menos 1 vez en el Sheet"),
-                unsafe_allow_html=True)
-    k2.markdown(kpi_card("Interacciones totales", n_total, "filas del Sheet LOGS"),
-                unsafe_allow_html=True)
-    k3.markdown(kpi_card("Promedio", f"{counts_per_uuid.mean():.1f}" if n_uuids else "0",
-                         "interacciones por UUID"),
-                unsafe_allow_html=True)
-    k4.markdown(kpi_card("Mediana", f"{counts_per_uuid.median():.0f}" if n_uuids else "0",
-                         "interacciones por UUID"),
-                unsafe_allow_html=True)
+    tracks_universe = df_tracks[df_tracks["uuid"].isin(universe_uuids_abc)]
+    if tracks_universe.empty:
+        st.info("Sin eventos Segment para el universo seleccionado.")
+    else:
+        # UUIDs únicos por evento (cuántos clientes hicieron cada acción)
+        uuids_por_evento = (
+            tracks_universe.groupby("event_name")["uuid"].nunique().sort_values(ascending=False)
+        )
+        total_uuids = int(tracks_universe["uuid"].nunique())
 
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    # Distribución sin buckets: para cada N exacto (1, 2, 3, ...), cuántos UUIDs
-    dist_series = counts_per_uuid.value_counts().sort_index()
-    dist_series.index = dist_series.index.astype(int)
-    dist = pd.DataFrame({
-        "Veces que abrió": dist_series.index.astype(int),
-        "UUIDs": dist_series.values.astype(int),
-    })
+        # KPIs de comportamiento (% del que entró que llegó a cada hito)
+        def _pct_uuids_que(event_substr: list[str]) -> int:
+            """N UUIDs que dispararon AL MENOS UNO de los eventos del set."""
+            mask = pd.Series(False, index=tracks_universe.index)
+            for s in event_substr:
+                mask |= tracks_universe["event_name"].str.contains(s, case=False, na=False)
+            return int(tracks_universe.loc[mask, "uuid"].nunique())
 
-    fig_dist = go.Figure(go.Bar(
-        x=dist["Veces que abrió"].astype(str), y=dist["UUIDs"],
-        marker_color=PRIMARY, text=dist["UUIDs"], textposition="outside",
-    ))
-    fig_dist.update_layout(
-        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        title=dict(text="Distribución de interacciones por cliente",
-                   font=dict(size=13, color=DEEP)),
-        height=360, margin=dict(l=10, r=10, t=44, b=10),
-        xaxis=dict(title="N° exacto de interacciones", gridcolor="#ede8f5",
-                   type="category"),
-        yaxis=dict(title="UUIDs", gridcolor="#ede8f5"),
-    )
-    st.plotly_chart(fig_dist, use_container_width=True, key="dist_aperturas")
+        n_entraron = _pct_uuids_que(["page_view_landing"]) or total_uuids
+        n_scroll_50 = _pct_uuids_que(["scroll_50"])
+        n_scroll_75 = _pct_uuids_que(["scroll_75"])
+        n_scroll_100 = _pct_uuids_que(["scroll_100"])
+        n_compar = _pct_uuids_que(["comparable_selected"])
+        n_cta_venta = _pct_uuids_que(["cta_continuar_venta"])
+        n_asesor = _pct_uuids_que(["cta_hablar_asesor", "whatsapp_click"])
+
+        # Fila 1: hitos de profundidad de navegación
+        k1, k2, k3, k4 = st.columns(4)
+        k1.markdown(kpi_card("Entraron landing", n_entraron, "page_view_landing"),
+                    unsafe_allow_html=True)
+        pct = lambda n: f"{n/n_entraron*100:.0f}%" if n_entraron else "0%"
+        k2.markdown(kpi_card("Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})",
+                             "del que entró"), unsafe_allow_html=True)
+        k3.markdown(kpi_card("Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})",
+                             "del que entró"), unsafe_allow_html=True)
+        k4.markdown(kpi_card("Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})",
+                             "del que entró"), unsafe_allow_html=True)
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        # Fila 2: hitos de intención de compra/contacto
+        k5, k6, k7, k8 = st.columns(4)
+        k5.markdown(kpi_card("Vio comparables", _pct_uuids_que(["section_viewed_comparables"]),
+                             "section_viewed_comparables"), unsafe_allow_html=True)
+        k6.markdown(kpi_card("Eligió comparable", n_compar, "comparable_selected"),
+                    unsafe_allow_html=True)
+        k7.markdown(kpi_card("Click CTA venta", n_cta_venta, "cta_continuar_venta"),
+                    unsafe_allow_html=True)
+        k8.markdown(kpi_card("Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
+                    unsafe_allow_html=True)
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+        # Distribución de eventos: cuántos UUIDs únicos dispararon cada evento
+        col_dist1, col_dist2 = st.columns(2)
+        with col_dist1:
+            top_events = uuids_por_evento.head(15).sort_values(ascending=True)
+            fig_top = go.Figure(go.Bar(
+                x=top_events.values, y=top_events.index, orientation="h",
+                marker_color=PRIMARY, text=top_events.values, textposition="outside",
+            ))
+            fig_top.update_layout(
+                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                title=dict(text="UUIDs únicos por evento (top 15)",
+                           font=dict(size=13, color=DEEP)),
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                height=max(380, len(top_events) * 24 + 80),
+                margin=dict(l=10, r=60, t=44, b=10),
+                xaxis=dict(title="UUIDs", gridcolor="#ede8f5"),
+                yaxis=dict(gridcolor="#ede8f5"),
+            )
+            st.plotly_chart(fig_top, use_container_width=True, key="dist_eventos_top")
+
+        with col_dist2:
+            # Profundidad de scroll: % UUIDs por nivel
+            scroll_levels = ["scroll_25", "scroll_50", "scroll_75", "scroll_90", "scroll_100"]
+            scroll_data = [
+                {"Nivel": lvl.replace("scroll_", "") + "%",
+                 "UUIDs": _pct_uuids_que([lvl])}
+                for lvl in scroll_levels
+            ]
+            sd = pd.DataFrame(scroll_data)
+            sd["%"] = sd["UUIDs"] / max(n_entraron, 1) * 100
+            fig_scroll = go.Figure(go.Bar(
+                x=sd["Nivel"], y=sd["UUIDs"],
+                marker_color=[PRIMARY, MED, ACCENT, LIGHT, "#16a34a"],
+                text=[f"{n} ({p:.0f}%)" for n, p in zip(sd["UUIDs"], sd["%"])],
+                textposition="outside",
+            ))
+            fig_scroll.update_layout(
+                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                title=dict(text="Profundidad de scroll (UUIDs)",
+                           font=dict(size=13, color=DEEP)),
+                font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+                height=380, margin=dict(l=10, r=10, t=44, b=10),
+                xaxis=dict(title="Profundidad", gridcolor="#ede8f5"),
+                yaxis=dict(title="UUIDs únicos", gridcolor="#ede8f5"),
+            )
+            st.plotly_chart(fig_scroll, use_container_width=True, key="dist_scroll")
+
+        # Tabla detallada de eventos
+        with st.expander("Tabla · todos los eventos (UUIDs únicos)", expanded=False):
+            tabla_eventos = uuids_por_evento.reset_index()
+            tabla_eventos.columns = ["Evento", "UUIDs únicos"]
+            tabla_eventos["% del universo"] = (
+                tabla_eventos["UUIDs únicos"] / max(n_entraron, 1) * 100
+            ).round(1).astype(str) + "%"
+            st.dataframe(tabla_eventos, hide_index=True, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
