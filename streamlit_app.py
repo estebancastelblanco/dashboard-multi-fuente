@@ -75,8 +75,10 @@ for idx, exp in enumerate(REGISTRY):
 
         st.page_link(exp.page, label=f"Abrir dashboard →", use_container_width=True)
 
-        if exp.attachments:
+        if exp.attachments or exp.external_links:
             with st.expander("Documentos adjuntos", expanded=False):
+                for label, url in exp.external_links:
+                    st.markdown(f"- [{label}]({url})")
                 for rel in exp.attachments:
                     path = ROOT / rel
                     if not path.exists():

@@ -15,6 +15,7 @@ class Experiment:
     page: str                  # Ruta a la pagina .py en pages/
     description: str = ""
     attachments: list[str] = field(default_factory=list)  # rutas relativas a docs embebidos
+    external_links: list[tuple[str, str]] = field(default_factory=list)  # (label, url)
     # Etapas del funnel que NO tenemos en vivo (delivery/open stats de WA).
     # Los valores live se computan en la página.
     funnel_baseline: dict = field(default_factory=dict)
@@ -34,6 +35,12 @@ REGISTRY: list[Experiment] = [
             "sobre la base de descartes de Habi Sellers. A/B AH=84m vs BH=120m."
         ),
         attachments=["experiments/fakedoor_habicapital/funnel.md"],
+        external_links=[
+            ("HubSpot Workflow · flow 1805564502",
+             "https://app.hubspot.com/workflows/6215805/platform/flow/1805564502/edit"),
+            ("HubSpot Workflow · flow 1798965900",
+             "https://app.hubspot.com/workflows/6215805/platform/flow/1798965900/edit"),
+        ],
         funnel_baseline={
             # Constante de delivery WA (no hay API live de Infobip — promedio historico)
             "wa_delivery_ratio": 0.77,

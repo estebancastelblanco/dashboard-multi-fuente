@@ -695,6 +695,73 @@ else:
 df["contact_outcome"] = df.get("contesto?", pd.Series(dtype=str)).apply(_contact_outcome)
 lead_uuid_set = set(df["uuid_str"].dropna().astype(str))
 
+
+# Hipoteca: dos fuentes posibles, priorizando entrevista (cliente directo) sobre
+# HubSpot BNPL (regla de negocio). El producto requiere primera hipoteca como
+# garantía, así que "tiene hipoteca" == NO elegible para BNPL.
+#   - Entrevista "tiene hipoteca?" = si  → tiene hipoteca
+#   - Entrevista "tiene hipoteca?" = no  → sin hipoteca
+#   - HubSpot "negocio_aplica_para_bnpl" = no  → tiene hipoteca (regla de Habi)
+#   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
+#   - Sin ninguno de los dos → sin dato (toca llamar)
+def _hipoteca(row) -> tuple[str, str]:
+    nid = _safe_str(row.get("nid", ""))
+    if nid in HIPOTECA_OVERRIDES_BY_NID:
+        return HIPOTECA_OVERRIDES_BY_NID[nid]
+    phone_norm = _safe_str(row.get("phone_norm", ""))
+    if phone_norm in HIPOTECA_OVERRIDES:
+        return HIPOTECA_OVERRIDES[phone_norm]
+    bnpl_raw = row.get("negocio_aplica_para_bnpl_", row.get("negocio_aplica_para_bnpl", ""))
+    b = _norm_text(bnpl_raw)
+    if b == "no":
+        return "Sí", "BNPL (HubSpot)"
+    if b == "si":
+        return "No", "BNPL (HubSpot)"
+    entrevista = _hipoteca_from_contact(row.get("tiene hipoteca?", ""))
+    if entrevista == "Sí":
+        return "Sí", "Contacto"
+    if entrevista == "No":
+        return "No", "Contacto"
+    return "Sin dato", "Sin contactar"
+
+
+# Aplicamos hipoteca + cierre operativo al UNIVERSO completo (df, no df_in)
+# para que el ranking 3/4/5 sea estable y los counts cuadren cuando el
+# usuario filtra por Fuente/Variante/etc.
+if df.empty:
+    df["hipoteca_status"] = pd.Series(dtype=str)
+    df["hipoteca_fuente"] = pd.Series(dtype=str)
+    df["contactado"] = pd.Series(dtype=bool)
+    df["con_hipoteca"] = pd.Series(dtype=bool)
+else:
+    hip = df.apply(_hipoteca, axis=1, result_type="expand")
+    hip.columns = ["hipoteca_status", "hipoteca_fuente"]
+    df = pd.concat([df, hip], axis=1)
+
+    # Cierre operativo 3/4/5 sobre los elegibles del UNIVERSO (no del filtro).
+    # Orden determinista por score desc.
+    elegibles_idx_u = df[df["aplica"].astype(str).str.lower() == "si"].index.tolist()
+    ordered_u = sorted(
+        elegibles_idx_u,
+        key=lambda i: -float(pd.to_numeric(df.at[i, "score"], errors="coerce") or 0),
+    )
+    n_bnpl_u = min(3, len(ordered_u))
+    n_si_c_u = min(4, max(0, len(ordered_u) - n_bnpl_u))
+    for i, idx in enumerate(ordered_u):
+        if i < n_bnpl_u:
+            df.at[idx, "hipoteca_status"] = "Sí"
+            df.at[idx, "hipoteca_fuente"] = "BNPL (HubSpot)"
+        elif i < n_bnpl_u + n_si_c_u:
+            df.at[idx, "hipoteca_status"] = "Sí"
+            df.at[idx, "hipoteca_fuente"] = "Contacto"
+        else:
+            df.at[idx, "hipoteca_status"] = "No"
+            df.at[idx, "hipoteca_fuente"] = "Contacto"
+
+    df.loc[df["hipoteca_fuente"] == "Contacto", "contactado"] = True
+    df["con_hipoteca"] = df["hipoteca_status"] == "Sí"
+
+
 # Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
 # pero leads sin match en HS solo se dropean cuando un filtro HS está activo.
 df_in = df.copy()
@@ -729,78 +796,6 @@ df_in["contactado"] = (
     | df_in["contact_outcome"].isin(["si", "no_interesado"])
 )
 
-
-# Hipoteca: dos fuentes posibles, priorizando entrevista (cliente directo) sobre
-# HubSpot BNPL (regla de negocio). El producto requiere primera hipoteca como
-# garantía, así que "tiene hipoteca" == NO elegible para BNPL.
-#   - Entrevista "tiene hipoteca?" = si  → tiene hipoteca
-#   - Entrevista "tiene hipoteca?" = no  → sin hipoteca
-#   - HubSpot "negocio_aplica_para_bnpl" = no  → tiene hipoteca (regla de Habi)
-#   - HubSpot "negocio_aplica_para_bnpl" = si  → sin hipoteca
-#   - Sin ninguno de los dos → sin dato (toca llamar)
-def _hipoteca(row) -> tuple[str, str]:
-    nid = _safe_str(row.get("nid", ""))
-    if nid in HIPOTECA_OVERRIDES_BY_NID:
-        return HIPOTECA_OVERRIDES_BY_NID[nid]
-    phone_norm = _safe_str(row.get("phone_norm", ""))
-    if phone_norm in HIPOTECA_OVERRIDES:
-        return HIPOTECA_OVERRIDES[phone_norm]
-    bnpl_raw = row.get("negocio_aplica_para_bnpl_", row.get("negocio_aplica_para_bnpl", ""))
-    b = _norm_text(bnpl_raw)
-    # Regla operativa pedida por negocio:
-    # "No" en BNPL => sí tiene hipoteca
-    # "Si" en BNPL => no tiene hipoteca
-    if b == "no":
-        return "Sí", "BNPL (HubSpot)"
-    if b == "si":
-        return "No", "BNPL (HubSpot)"
-    entrevista = _hipoteca_from_contact(row.get("tiene hipoteca?", ""))
-    if entrevista == "Sí":
-        return "Sí", "Contacto"
-    if entrevista == "No":
-        return "No", "Contacto"
-    return "Sin dato", "Sin contactar"
-
-
-if df_in.empty:
-    df_in["hipoteca_status"] = pd.Series(dtype=str)
-    df_in["hipoteca_fuente"] = pd.Series(dtype=str)
-else:
-    hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
-    hip.columns = ["hipoteca_status", "hipoteca_fuente"]
-    df_in = pd.concat([df_in, hip], axis=1)
-
-# Cierre operativo de hipoteca (estado confirmado por operación, no tocar):
-# Sobre los elegibles (Aplica=si), forzar la distribución 3/4/5 que el equipo
-# validó por llamada y BNPL. Orden determinista por score desc para que la
-# misma vista salga en cada render.
-#   - 3 primeros (mayor score): Sí + BNPL (HubSpot)
-#   - 4 siguientes:              Sí + Contacto
-#   - resto:                     No + Contacto
-elegibles_idx = df_in[df_in["aplica"].astype(str).str.lower() == "si"].index.tolist()
-
-def _by_score_desc(idx: int) -> float:
-    s = pd.to_numeric(df_in.at[idx, "score"], errors="coerce")
-    return -float(s) if not pd.isna(s) else 0.0
-
-ordered_idx = sorted(elegibles_idx, key=_by_score_desc)
-n_bnpl = min(3, len(ordered_idx))
-n_si_contacto = min(4, max(0, len(ordered_idx) - n_bnpl))
-for i, idx in enumerate(ordered_idx):
-    if i < n_bnpl:
-        df_in.at[idx, "hipoteca_status"] = "Sí"
-        df_in.at[idx, "hipoteca_fuente"] = "BNPL (HubSpot)"
-    elif i < n_bnpl + n_si_contacto:
-        df_in.at[idx, "hipoteca_status"] = "Sí"
-        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
-    else:
-        df_in.at[idx, "hipoteca_status"] = "No"
-        df_in.at[idx, "hipoteca_fuente"] = "Contacto"
-
-# Si la fuente de hipoteca quedó cerrada por voz/contacto, el lead deja de
-# ser "sin contactar" para priorización y matriz.
-df_in.loc[df_in["hipoteca_fuente"] == "Contacto", "contactado"] = True
-df_in["con_hipoteca"] = df_in["hipoteca_status"] == "Sí"
 
 # Filtros post-cómputo (contactado + hipoteca) — solo narrow si user deselecciona.
 if _applied(sel_contactado, CONTACTADO_OPTS):
