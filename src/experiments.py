@@ -34,7 +34,7 @@ REGISTRY: list[Experiment] = [
             "Crédito de Libre Inversión con Garantía Hipotecaria al 20% EA "
             "sobre la base de descartes de Habi Sellers. A/B AH=84m vs BH=120m."
         ),
-        attachments=["experiments/fakedoor_habicapital/funnel.md"],
+        attachments=[],
         external_links=[
             ("HubSpot Workflow · flow 1805564502",
              "https://app.hubspot.com/workflows/6215805/platform/flow/1805564502/edit"),
