@@ -49,7 +49,8 @@ st.markdown(
 
 DAY = 86400
 
-VARIANTS = ["A", "B", "C"]
+VARIANTS = ["A", "B", "C", "(sin variante)"]
+NULL_VARIANT_LABEL = "(sin variante)"
 COLOR_APROBADOS = PRIMARY
 COLOR_APROBADOS_RTA = ACCENT
 COLOR_CIERRE = LIGHT
@@ -286,7 +287,13 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
 # ─────────────────────────────────────────────────────────────────────────────
 # Filtros aplicados (fechas)
 # ─────────────────────────────────────────────────────────────────────────────
-df_var = df[df["abc_test_landing_co"].isin(sel_variants)].copy()
+# Permitir filtrar por A/B/C y "(sin variante)" (= abc_test_landing_co NULL).
+_real_variants = [v for v in sel_variants if v != NULL_VARIANT_LABEL]
+_include_null = NULL_VARIANT_LABEL in sel_variants
+_mask_var = df["abc_test_landing_co"].isin(_real_variants) if _real_variants else pd.Series(False, index=df.index)
+if _include_null:
+    _mask_var = _mask_var | df["abc_test_landing_co"].isna()
+df_var = df[_mask_var].copy()
 # Funnel semanal: universo completo MX (sin filtrar por variante) para que
 # los conteos cuadren con Looker, que no aplica ese filtro.
 df_apro_all = df[df["fecha_aprobado"].between(ts_from, ts_to, inclusive="both")]
@@ -574,6 +581,17 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 table = df_apro.copy()
 table["Cierre"] = table["fecha_cierre_efectiva"].notna().map({True: "Sí", False: "No"})
+
+# "Veces abrió landing" = nº de filas del Sheet LOGS para ese deal_uuid.
+# Cada fila del Sheet corresponde a un envío/apertura del link.
+if not df_logs.empty and "uuid" in df_logs.columns:
+    aperturas_por_uuid = df_logs["uuid"].value_counts().to_dict()
+else:
+    aperturas_por_uuid = {}
+table["Veces abrió landing"] = (
+    table["deal_uuid"].astype(str).str.lower().map(aperturas_por_uuid).fillna(0).astype(int)
+)
+
 show_cols = [
     ("abc_test_landing_co", "abc_test_landing_co"),
     ("nid", "nid"),
@@ -583,10 +601,37 @@ show_cols = [
     ("Cierre", "Cierre"),
     ("fecha_cierre", "fecha_cierre"),
     ("fue_ofertado", "fue_ofertado"),
+    ("Veces abrió landing", "Veces abrió landing"),
     ("categoria_ancla", "Categoria ancla"),
 ]
 table_view = table[[c for c, _ in show_cols]].rename(columns=dict(show_cols))
-st.dataframe(table_view, hide_index=True, use_container_width=True)
+
+# Color escala rojo (pocas aperturas) → verde (muchas) en la columna
+# "Veces abrió landing". Sin matplotlib (no instalado en cloud).
+_max_aperturas = max(int(table_view["Veces abrió landing"].max()), 1)
+
+def _color_aperturas(v):
+    try:
+        n = int(v)
+    except Exception:
+        return ""
+    if n <= 0:
+        return "background-color:#fef2f2;color:#7f1d1d"  # rojo muy claro
+    ratio = min(n / _max_aperturas, 1.0)
+    # Interpolar rojo (#dc2626) → amarillo (#f59e0b) → verde (#16a34a)
+    if ratio < 0.5:
+        # rojo → amarillo
+        t = ratio / 0.5
+        r, g, b = int(220 - (220 - 245) * t), int(38 + (158 - 38) * t), int(38 + (11 - 38) * t)
+    else:
+        # amarillo → verde
+        t = (ratio - 0.5) / 0.5
+        r, g, b = int(245 - (245 - 22) * t), int(158 + (163 - 158) * t), int(11 + (74 - 11) * t)
+    text_color = "#fff" if ratio > 0.4 else "#222"
+    return f"background-color:rgb({r},{g},{b});color:{text_color};font-weight:600"
+
+styled = table_view.style.map(_color_aperturas, subset=["Veces abrió landing"])
+st.dataframe(styled, hide_index=True, use_container_width=True)
 
 st.divider()
 st.caption(
