@@ -2,10 +2,41 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
 import requests
+
+
+def _request_with_retry(
+    method: str, url: str, *,
+    max_retries: int = 5, backoff_base: float = 2.0, timeout: int = 30, **kwargs,
+) -> requests.Response:
+    """GET/POST con backoff exponencial para 429 y 5xx.
+
+    HubSpot devuelve 429 cuando se exceden los rate limits (10 req/s en search,
+    100 req/10s globales). Respetamos `Retry-After` si viene; si no, backoff
+    exponencial con un techo razonable.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.request(method, url, timeout=timeout, **kwargs)
+            if resp.status_code in (429, 502, 503, 504):
+                retry_after = resp.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after else min(backoff_base ** attempt, 30.0)
+                time.sleep(wait)
+                last_exc = requests.HTTPError(f"{resp.status_code} (retry {attempt + 1}/{max_retries})")
+                continue
+            resp.raise_for_status()
+            return resp
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exc = exc
+            time.sleep(min(backoff_base ** attempt, 30.0))
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"HubSpot {method} {url} failed after {max_retries} retries")
 
 # Propiedades del experimento FakeDoor (internal_name -> label en HubSpot)
 FAKEDOOR_PROPS: dict[str, str] = {
@@ -69,8 +100,7 @@ def fetch_property_options(property_name: str) -> dict[str, str]:
     debe mostrar el label legible. Cachear en streamlit con TTL alto (1h).
     """
     url = f"https://api.hubapi.com/crm/v3/properties/deals/{property_name}"
-    resp = requests.get(url, headers=_headers(), timeout=20)
-    resp.raise_for_status()
+    resp = _request_with_retry("GET", url, headers=_headers(), timeout=20)
     body = resp.json()
     return {opt["value"]: opt.get("label", opt["value"])
             for opt in body.get("options", []) if "value" in opt}
@@ -89,8 +119,7 @@ def fetch_recent_deals(limit: int = 10) -> pd.DataFrame:
         "properties": properties,
         "limit": int(limit),
     }
-    resp = requests.post(url, json=payload, headers=_headers(), timeout=20)
-    resp.raise_for_status()
+    resp = _request_with_retry("POST", url, json=payload, headers=_headers(), timeout=20)
     rows = [{k: d.get("properties", {}).get(k) for k in properties}
             for d in resp.json().get("results", [])]
     return pd.DataFrame(rows, columns=properties).rename(columns={
@@ -127,8 +156,7 @@ def fetch_fakedoor_deals(since_iso: str | None = None) -> pd.DataFrame:
         }
         if after:
             payload["after"] = after
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
-        resp.raise_for_status()
+        resp = _request_with_retry("POST", url, json=payload, headers=_headers(), timeout=30)
         body = resp.json()
         for deal in body.get("results", []):
             props = deal.get("properties", {})
@@ -137,51 +165,12 @@ def fetch_fakedoor_deals(since_iso: str | None = None) -> pd.DataFrame:
         if not paging:
             break
         after = paging.get("after")
+        # Espaciar peticiones para evitar rate limit (search: 10 req/s)
+        time.sleep(0.15)
 
     df = pd.DataFrame(rows, columns=properties)
     if "createdate" in df.columns:
         df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
-    return df
-
-
-def fetch_deals_created_range(
-    since_iso: str,
-    until_iso: str | None = None,
-    *,
-    properties: list[str] | None = None,
-) -> pd.DataFrame:
-    """Trae deals via listado paginado y filtra el rango localmente."""
-    props = properties or ["nid", "createdate"]
-    url = "https://api.hubapi.com/crm/v3/objects/deals"
-    rows: list[dict] = []
-    after: str | None = None
-    since_dt = pd.to_datetime(since_iso, errors="coerce", utc=True)
-    until_dt = pd.to_datetime(until_iso, errors="coerce", utc=True) if until_iso else None
-    for _ in range(500):
-        params: list[tuple[str, str | int]] = [("limit", 100), ("archived", "false")]
-        for prop in props:
-            params.append(("properties", prop))
-        if after:
-            params.append(("after", after))
-        resp = requests.get(url, params=params, headers=_headers(), timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
-        for deal in body.get("results", []):
-            prop_values = deal.get("properties", {})
-            rows.append({k: prop_values.get(k) for k in props})
-        paging = body.get("paging", {}).get("next")
-        if not paging:
-            break
-        after = paging.get("after")
-
-    df = pd.DataFrame(rows, columns=props)
-    if "createdate" in df.columns:
-        created_utc = pd.to_datetime(df["createdate"], errors="coerce", utc=True)
-        df["createdate"] = created_utc
-        if pd.notna(since_dt):
-            df = df[created_utc >= since_dt].copy()
-        if pd.notna(until_dt):
-            df = df[created_utc <= until_dt].copy()
     return df
 
 
@@ -241,8 +230,7 @@ def fetch_preoferta_deals(
         }
         if after:
             payload["after"] = after
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
-        resp.raise_for_status()
+        resp = _request_with_retry("POST", url, json=payload, headers=_headers(), timeout=30)
         body = resp.json()
         for deal in body.get("results", []):
             props = deal.get("properties", {})
@@ -251,6 +239,8 @@ def fetch_preoferta_deals(
         if not paging:
             break
         after = paging.get("after")
+        # Espaciar peticiones para evitar rate limit (search: 10 req/s)
+        time.sleep(0.15)
 
     df = pd.DataFrame(rows, columns=properties)
     if "createdate" in df.columns:
@@ -264,7 +254,6 @@ def fetch_preoferta_deals(
 def list_deal_properties() -> pd.DataFrame:
     """Devuelve todas las propiedades del objeto deal (para descubrir internal names)."""
     url = "https://api.hubapi.com/crm/v3/properties/deals"
-    resp = requests.get(url, headers=_headers(), timeout=20)
-    resp.raise_for_status()
+    resp = _request_with_retry("GET", url, headers=_headers(), timeout=20)
     rows = [{"name": p["name"], "label": p.get("label", "")} for p in resp.json().get("results", [])]
     return pd.DataFrame(rows).sort_values("label").reset_index(drop=True)

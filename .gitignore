@@ -25,3 +25,7 @@ venv/
 
 # Cache intermedio del extractor de cédulas (contiene URLs firmadas + PII)
 data/escriturados_2026_extracted_cache.csv
+
+# Snapshots locales de HubSpot (PII: nombres, teléfonos, cédulas en deals)
+data/hs_deals_snapshot.parquet
+data/hs_property_labels.parquet

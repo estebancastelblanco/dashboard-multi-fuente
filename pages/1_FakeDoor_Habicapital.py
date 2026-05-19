@@ -238,11 +238,43 @@ HIPOTECA_OVERRIDES_BY_NID: dict[str, tuple[str, str]] = {
 DAY = 86400      # 24h
 SHORT = 120      # 2 min
 
+# Snapshots de HubSpot en disco — sobreviven a reload del proceso y evitan 429
+HS_DEALS_SNAPSHOT = REPO_ROOT / "data" / "hs_deals_snapshot.parquet"
+HS_LABELS_SNAPSHOT = REPO_ROOT / "data" / "hs_property_labels.parquet"
+SNAPSHOT_MAX_AGE_SEC = 12 * 3600  # refresca contra HubSpot si tiene > 12h
+
+
+def _snapshot_is_fresh(path: Path) -> bool:
+    if not path.exists():
+        return False
+    age = datetime.now().timestamp() - path.stat().st_mtime
+    return age < SNAPSHOT_MAX_AGE_SEC
+
 
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · deals fakedoor…", persist="disk")
-def load_hs_deals() -> pd.DataFrame:
-    # Sin filtro de fecha — universo = todos los deals con flag_fakedoor.
-    return hs_src.fetch_fakedoor_deals(since_iso=None)
+def load_hs_deals(force_refresh: bool = False) -> pd.DataFrame:
+    """Universo de deals con flag_fakedoor.
+
+    Estrategia: leer snapshot Parquet en disco si existe y es reciente
+    (< 12h). Solo pega a HubSpot cuando expira o falta. Maneja 429 con
+    backoff y, si falla, cae al snapshot aunque esté viejo para no
+    romper el dashboard.
+    """
+    if not force_refresh and _snapshot_is_fresh(HS_DEALS_SNAPSHOT):
+        return pd.read_parquet(HS_DEALS_SNAPSHOT)
+    try:
+        df = hs_src.fetch_fakedoor_deals(since_iso=None)
+        HS_DEALS_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(HS_DEALS_SNAPSHOT, index=False)
+        return df
+    except Exception as exc:
+        if HS_DEALS_SNAPSHOT.exists():
+            st.warning(
+                f"HubSpot falló ({type(exc).__name__}); usando snapshot local "
+                f"de {datetime.fromtimestamp(HS_DEALS_SNAPSHOT.stat().st_mtime):%Y-%m-%d %H:%M}."
+            )
+            return pd.read_parquet(HS_DEALS_SNAPSHOT)
+        raise
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · nid mapping…", persist="disk")
@@ -251,14 +283,34 @@ def load_nid_mapping(deal_uuids: tuple[str, ...]) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · catálogo de propiedades…", persist="disk")
-def load_property_labels() -> dict[str, dict[str, str]]:
-    """value→label por propiedad enum. Casi nunca cambia."""
+def load_property_labels(force_refresh: bool = False) -> dict[str, dict[str, str]]:
+    """value→label por propiedad enum. Casi nunca cambia → cache largo en disco."""
+    if not force_refresh and HS_LABELS_SNAPSHOT.exists():
+        # Property labels casi nunca cambian — usamos el snapshot mientras exista
+        try:
+            df_snap = pd.read_parquet(HS_LABELS_SNAPSHOT)
+            return {
+                prop: dict(zip(df_snap[df_snap["prop"] == prop]["value"],
+                               df_snap[df_snap["prop"] == prop]["label"]))
+                for prop in df_snap["prop"].unique()
+            }
+        except Exception:
+            pass
     result: dict[str, dict[str, str]] = {}
+    rows: list[dict] = []
     for prop in ("estado", "oportunidad_del_negocio"):
         try:
             result[prop] = hs_src.fetch_property_options(prop)
+            for v, l in result[prop].items():
+                rows.append({"prop": prop, "value": v, "label": l})
         except Exception:
             result[prop] = {}
+    if rows:
+        try:
+            HS_LABELS_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_parquet(HS_LABELS_SNAPSHOT, index=False)
+        except Exception:
+            pass
     return result
 
 
@@ -371,14 +423,6 @@ def load_sellers_credit_breakdown(nids: tuple[int, ...]) -> pd.DataFrame:
     return bq_src.fetch_sellers_credit_breakdown(list(nids))
 
 
-@st.cache_data(ttl=DAY, show_spinner="HubSpot · deals 2026…", persist="disk")
-def load_hs_deals_2026() -> pd.DataFrame:
-    return hs_src.fetch_deals_created_range(
-        "2026-01-01",
-        "2026-12-31T23:59:59",
-        properties=["nid", "createdate"],
-    )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Carga base
@@ -472,9 +516,25 @@ estados_all = _unique(df_hs.get("estado_label", pd.Series(dtype=str)))
 oport_all = _unique(df_hs.get("oportunidad_del_negocio_label", pd.Series(dtype=str)))
 
 with st.sidebar:
-    if st.button("Actualizar datos", use_container_width=True):
+    if st.button("Actualizar datos", use_container_width=True,
+                 help="Limpia el cache pero conserva los snapshots de HubSpot en disco."):
         st.cache_data.clear()
         st.rerun()
+    if st.button("Refrescar HubSpot", use_container_width=True,
+                 help="Borra el snapshot local y vuelve a pedir todos los deals. Sólo si hay datos atrasados."):
+        for p in (HS_DEALS_SNAPSHOT, HS_LABELS_SNAPSHOT):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        st.cache_data.clear()
+        st.rerun()
+    if HS_DEALS_SNAPSHOT.exists():
+        snap_age = datetime.now().timestamp() - HS_DEALS_SNAPSHOT.stat().st_mtime
+        st.caption(
+            f"Snapshot HubSpot: hace {snap_age/3600:.1f}h "
+            f"({datetime.fromtimestamp(HS_DEALS_SNAPSHOT.stat().st_mtime):%Y-%m-%d %H:%M})"
+        )
     st.markdown("---")
 
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
