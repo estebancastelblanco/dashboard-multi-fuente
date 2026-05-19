@@ -517,24 +517,21 @@ oport_all = _unique(df_hs.get("oportunidad_del_negocio_label", pd.Series(dtype=s
 
 with st.sidebar:
     if st.button("Actualizar datos", use_container_width=True,
-                 help="Limpia el cache pero conserva los snapshots de HubSpot en disco."):
-        st.cache_data.clear()
-        st.rerun()
-    if st.button("Refrescar HubSpot", use_container_width=True,
-                 help="Borra el snapshot local y vuelve a pedir todos los deals. Sólo si hay datos atrasados."):
-        for p in (HS_DEALS_SNAPSHOT, HS_LABELS_SNAPSHOT):
+                 help="Refresca solo los datos del FakeDoor. Reutiliza el snapshot de HubSpot si tiene < 12h."):
+        # Limpia solo los caches de esta página (no toca otros proyectos).
+        # El snapshot Parquet se conserva → si tiene < 12h, no se pega a HubSpot.
+        for loader in (
+            load_hs_deals, load_property_labels, load_nid_mapping,
+            load_leads_with_scores, load_entrevistas, load_landing_events,
+            load_client_categories, load_experian_scores,
+            load_experian_scores_2026, load_experian_recent_scores,
+            load_escriturados_age_score, load_sellers_credit_breakdown,
+        ):
             try:
-                p.unlink(missing_ok=True)
+                loader.clear()
             except Exception:
                 pass
-        st.cache_data.clear()
         st.rerun()
-    if HS_DEALS_SNAPSHOT.exists():
-        snap_age = datetime.now().timestamp() - HS_DEALS_SNAPSHOT.stat().st_mtime
-        st.caption(
-            f"Snapshot HubSpot: hace {snap_age/3600:.1f}h "
-            f"({datetime.fromtimestamp(HS_DEALS_SNAPSHOT.stat().st_mtime):%Y-%m-%d %H:%M})"
-        )
     st.markdown("---")
 
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
