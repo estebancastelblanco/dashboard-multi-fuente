@@ -191,7 +191,7 @@ with st.sidebar:
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
 
     st.markdown("### Rango de fechas")
-    default_start = date(2026, 5, 19)
+    default_start = date(2026, 3, 25)
     default_end = date.today()
     sel_range = st.date_input(
         "rango",
@@ -216,9 +216,9 @@ with st.sidebar:
 
     st.markdown("### Variante")
     sel_variants = st.multiselect(
-        "variantes", VARIANTS, default=["B", "C"],
+        "variantes", VARIANTS, default=VARIANTS,
         label_visibility="collapsed",
-        help="Por defecto B vs C (las que el experimento compara). A queda residual.",
+        help="Por defecto A, B, C y '(sin variante)'. Deselecciona para enfocar.",
     )
 
     st.markdown("### NID")
