@@ -504,40 +504,43 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-# Enviados = nids únicos del template de WhatsApp ∩ universo filtrado
-# Abiertos = UUIDs con al menos 1 evento de página en BQ ∩ universo
-# Interacciones = total de eventos de página en BQ
+# Funnel: solo 2 etapas
+# - Enviados = nids del template WhatsApp ∩ universo donde abc IN ('A','B','C')
+#   (excluye "(sin variante)" — solo cuenta deals con variante asignada)
+# - Interacciones = registros únicos en el Sheet LOGS (UUIDs únicos en el log)
 df_envios = load_envios_wa()
-universe_nids = set(df_section3["nid"].dropna().astype(int).tolist())
-universe_uuids = set(df_section3["deal_uuid"].dropna().astype(str).str.lower())
+# universo restringido a variantes reales A/B/C dentro del rango/nid/equipo
+df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C"])]
+universe_nids_abc = set(df_section3_abc["nid"].dropna().astype(int).tolist())
+universe_uuids_abc = set(df_section3_abc["deal_uuid"].dropna().astype(str).str.lower())
 
-if not df_envios.empty:
-    envios_in_universe = (
-        df_envios[df_envios["nid"].isin(universe_nids)] if universe_nids else df_envios
-    )
+if not df_envios.empty and universe_nids_abc:
+    envios_in_universe = df_envios[df_envios["nid"].isin(universe_nids_abc)]
     n_enviados = int(envios_in_universe["nid"].dropna().nunique())
 else:
     n_enviados = 0
 
-events_in_universe = df_events[df_events["uuid"].isin(universe_uuids)] if not df_events.empty else df_events
-n_abrieron = int(events_in_universe["uuid"].nunique()) if not events_in_universe.empty else 0
-n_interacciones = int(events_in_universe["events"].sum()) if not events_in_universe.empty else 0
+if not df_logs.empty:
+    logs_in_universe = df_logs[df_logs["uuid"].isin(universe_uuids_abc)] if universe_uuids_abc else df_logs
+    n_interacciones = int(logs_in_universe["uuid"].nunique())
+else:
+    n_interacciones = 0
 
-f_labels = ["Enviados", "Abrieron landing", "Interacciones (eventos)"]
-f_vals = [n_enviados, n_abrieron, n_interacciones]
-f_colors = [DEEP, PRIMARY, ACCENT]
+f_labels = ["Enviados", "Interacciones"]
+f_vals = [n_enviados, n_interacciones]
+f_colors = [DEEP, PRIMARY]
 f_text = [f"{v:,}" for v in f_vals]
 nonzero = [v for v in f_vals if v > 0]
-use_log_f = (max(f_vals) if f_vals else 0) > 50 and (min(nonzero) if nonzero else 0) > 0
+use_log_f = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
 fig_funnel = go.Figure(go.Bar(
     x=f_vals, y=f_labels, orientation="h",
     marker_color=f_colors, text=f_text,
-    textposition="outside", textfont=dict(size=11, color=DEEP),
+    textposition="outside", textfont=dict(size=12, color=DEEP),
 ))
 fig_funnel.update_layout(
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=300, margin=dict(l=10, r=80, t=10, b=10),
+    height=240, margin=dict(l=10, r=80, t=10, b=10),
     xaxis=dict(type="log" if use_log_f else "linear",
                title="Clientes" + (" (log)" if use_log_f else ""),
                gridcolor="#ede8f5", tickformat=",d"),
@@ -551,46 +554,46 @@ st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Interacciones por cliente</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-if events_in_universe.empty:
-    st.info("Sin eventos en BQ para el universo seleccionado.")
+# Interacciones desde el Sheet LOGS (cada fila = 1 interacción registrada).
+# Filtramos a UUIDs del universo con variante A/B/C.
+if df_logs.empty or not universe_uuids_abc:
+    st.info("Sin interacciones en el Sheet para el universo seleccionado.")
 else:
-    eventos_per_uuid = events_in_universe["events"].astype(int)
+    logs_universe = df_logs[df_logs["uuid"].isin(universe_uuids_abc)]
+    counts_per_uuid = logs_universe["uuid"].value_counts()
+    n_uuids = int(len(counts_per_uuid))
+    n_total = int(counts_per_uuid.sum())
     k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(kpi_card("UUIDs con eventos", int(len(eventos_per_uuid)), "abrieron al menos 1 vez"),
+    k1.markdown(kpi_card("UUIDs con interacciones", n_uuids,
+                         "aparecen al menos 1 vez en el Sheet"),
                 unsafe_allow_html=True)
-    k2.markdown(kpi_card("Eventos totales", int(eventos_per_uuid.sum()), "page views"),
+    k2.markdown(kpi_card("Interacciones totales", n_total, "filas del Sheet LOGS"),
                 unsafe_allow_html=True)
-    k3.markdown(kpi_card("Promedio", f"{eventos_per_uuid.mean():.1f}", "eventos por UUID"),
+    k3.markdown(kpi_card("Promedio", f"{counts_per_uuid.mean():.1f}" if n_uuids else "0",
+                         "interacciones por UUID"),
                 unsafe_allow_html=True)
-    k4.markdown(kpi_card("Mediana", f"{eventos_per_uuid.median():.0f}", "eventos por UUID"),
+    k4.markdown(kpi_card("Mediana", f"{counts_per_uuid.median():.0f}" if n_uuids else "0",
+                         "interacciones por UUID"),
                 unsafe_allow_html=True)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    # Distribución del número de aperturas (1, 2, 3+, etc.)
-    bins_def = [(1, "1 vez"), (2, "2"), (3, "3"), (5, "4-5"), (10, "6-10"), (1000, "11+")]
-
-    def _bucket(n):
-        for limit, label in bins_def:
-            if n <= limit:
-                return label
-        return "11+"
-
-    dist = pd.Series([_bucket(n) for n in eventos_per_uuid]).value_counts().reindex(
-        [b[1] for b in bins_def], fill_value=0
-    ).reset_index()
+    # Distribución sin buckets: para cada N exacto (1, 2, 3, ...), cuántos UUIDs
+    dist = counts_per_uuid.value_counts().sort_index().reset_index()
     dist.columns = ["Veces que abrió", "UUIDs"]
+    dist["Veces que abrió"] = dist["Veces que abrió"].astype(int)
 
     fig_dist = go.Figure(go.Bar(
-        x=dist["Veces que abrió"], y=dist["UUIDs"],
+        x=dist["Veces que abrió"].astype(str), y=dist["UUIDs"],
         marker_color=PRIMARY, text=dist["UUIDs"], textposition="outside",
     ))
     fig_dist.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        title=dict(text="Distribución de aperturas por cliente",
+        title=dict(text="Distribución de interacciones por cliente",
                    font=dict(size=13, color=DEEP)),
-        height=320, margin=dict(l=10, r=10, t=44, b=10),
-        xaxis=dict(title="N° de veces que abrió", gridcolor="#ede8f5"),
+        height=360, margin=dict(l=10, r=10, t=44, b=10),
+        xaxis=dict(title="N° exacto de interacciones", gridcolor="#ede8f5",
+                   type="category"),
         yaxis=dict(title="UUIDs", gridcolor="#ede8f5"),
     )
     st.plotly_chart(fig_dist, use_container_width=True, key="dist_aperturas")
