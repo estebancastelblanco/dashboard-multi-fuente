@@ -452,24 +452,6 @@ df_experian_2026 = load_experian_scores_2026()
 df_experian_recent = load_experian_recent_scores()
 df_escriturados_age = load_escriturados_age_score()
 
-# Cargar categorías cliente del universo entero (no filtrado) para alimentar
-# el multiselect del sidebar. Se vuelve a filtrar más abajo según df_hs_f.
-nids_universo = (
-    tuple(sorted(df_hs["nid"].dropna().astype(int).unique().tolist()))
-    if not df_hs.empty and "nid" in df_hs.columns else tuple()
-)
-try:
-    df_cat_all = load_client_categories(nids_universo) if nids_universo else pd.DataFrame(columns=["nid", "motivo_venta_string"])
-except Exception:
-    df_cat_all = pd.DataFrame(columns=["nid", "motivo_venta_string"])
-df_cat_all["categoria_clean"] = (
-    df_cat_all.get("motivo_venta_string", pd.Series(dtype=str))
-    .fillna("(sin valor)").astype(str).str.strip().replace("", "(sin valor)")
-)
-categorias_all = (
-    df_cat_all["categoria_clean"].value_counts().index.tolist() if not df_cat_all.empty else []
-)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Decode internal IDs → labels en HubSpot
@@ -518,6 +500,32 @@ else:
     df_hs["oportunidad_del_negocio_label"] = pd.Series(dtype=str)
     df_hs["nid"] = pd.Series(dtype=float)
     df_hs["ctl"] = pd.Series(dtype=str)
+
+
+# Cargar categorías cliente del universo (post-enriquecimiento de nid) para
+# alimentar el multiselect del sidebar. Se filtra más abajo según df_hs_f.
+nids_universo = (
+    tuple(sorted(df_hs["nid"].dropna().astype(int).unique().tolist()))
+    if not df_hs.empty and "nid" in df_hs.columns else tuple()
+)
+try:
+    df_cat_all = (
+        load_client_categories(nids_universo)
+        if nids_universo
+        else pd.DataFrame(columns=["nid", "motivo_venta_string"])
+    )
+except Exception as exc:
+    df_cat_all = pd.DataFrame(columns=["nid", "motivo_venta_string"])
+    st.warning(f"BigQuery categorías cliente (sidebar): {type(exc).__name__}: {exc}")
+if not df_cat_all.empty and "motivo_venta_string" in df_cat_all.columns:
+    df_cat_all["categoria_clean"] = (
+        df_cat_all["motivo_venta_string"]
+        .fillna("(sin valor)").astype(str).str.strip().replace("", "(sin valor)")
+    )
+    categorias_all = df_cat_all["categoria_clean"].value_counts().index.tolist()
+else:
+    df_cat_all["categoria_clean"] = pd.Series(dtype=str)
+    categorias_all = []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
