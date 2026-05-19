@@ -642,44 +642,116 @@ else:
         n_compar = _pct_uuids_que(["comparable_selected"])
         n_cta_venta = _pct_uuids_que(["cta_continuar_venta"])
         n_asesor = _pct_uuids_que(["cta_hablar_asesor", "whatsapp_click"])
-
-        # Fila 1: hitos de profundidad de navegación
-        k1, k2, k3, k4 = st.columns(4)
-        k1.markdown(kpi_card("Entraron landing", n_entraron, "page_view_landing"),
-                    unsafe_allow_html=True)
         pct = lambda n: f"{n/n_entraron*100:.0f}%" if n_entraron else "0%"
-        k2.markdown(kpi_card("Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})",
-                             "del que entró"), unsafe_allow_html=True)
-        k3.markdown(kpi_card("Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})",
-                             "del que entró"), unsafe_allow_html=True)
-        k4.markdown(kpi_card("Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})",
-                             "del que entró"), unsafe_allow_html=True)
+
+        # CSS: hacer que los st.button del main content (NO sidebar) se vean
+        # como kpi_card. Sidebar buttons mantienen su estilo default.
+        st.markdown(f"""
+        <style>
+        section[data-testid="stMain"] div[data-testid="stButton"] > button {{
+            background: {WHITE} !important;
+            border: none !important;
+            border-left: 4px solid {PRIMARY} !important;
+            border-radius: 10px !important;
+            box-shadow: 0 1px 6px rgba(46,17,71,0.09) !important;
+            padding: 14px 18px !important;
+            min-height: 100px !important;
+            text-align: left !important;
+            color: {DEEP} !important;
+            font-weight: 600 !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button:hover {{
+            border-left-color: {ACCENT} !important;
+            border-color: transparent !important;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(46,17,71,0.16) !important;
+            color: {DEEP} !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button:focus,
+        section[data-testid="stMain"] div[data-testid="stButton"] > button:active {{
+            color: {DEEP} !important;
+            background: {WHITE} !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] {{
+            background: {WHITE} !important;
+            border: none !important;
+            border-left: 4px solid {DEEP} !important;
+            outline: 2px solid {PRIMARY} !important;
+            outline-offset: -2px !important;
+            color: {DEEP} !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button h2 {{
+            font-size: 1.75rem !important;
+            font-weight: 700 !important;
+            color: {PRIMARY} !important;
+            line-height: 1.1 !important;
+            margin: 0 0 4px 0 !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button h6 {{
+            font-size: 0.7rem !important;
+            color: #666 !important;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin: 2px 0 1px 0 !important;
+            font-weight: 600 !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button p {{
+            font-size: 0.75rem !important;
+            color: {MED} !important;
+            margin: 0 !important;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+
+        KPI_EVENTS = [
+            ("Entraron landing", n_entraron, "page_view_landing"),
+            ("Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})", "del que entró"),
+            ("Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})", "del que entró"),
+            ("Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})", "del que entró"),
+            ("Vio comparables", _pct_uuids_que(["section_viewed_comparables"]),
+             "section_viewed_comparables"),
+            ("Eligió comparable", n_compar, "comparable_selected"),
+            ("Click CTA venta", n_cta_venta, "cta_continuar_venta"),
+            ("Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
+        ]
+
+        if "kpi_filter" not in st.session_state:
+            st.session_state["kpi_filter"] = None
+
+        def _render_kpi_btn(col, label, value, sub):
+            is_active = st.session_state.get("kpi_filter") == label
+            # Texto multilínea: valor grande arriba, label en mayúsculas,
+            # subtítulo en gris (con markdown).
+            btn_text = (
+                f"## {value}\n"
+                f"###### {label.upper()}\n"
+                f"{sub}"
+            )
+            if col.button(
+                btn_text, key=f"kpi_btn_{label}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["kpi_filter"] = None if is_active else label
+                st.rerun()
+
+        # Fila 1
+        cols1 = st.columns(4)
+        for col, (lbl, val, sub) in zip(cols1, KPI_EVENTS[:4]):
+            _render_kpi_btn(col, lbl, val, sub)
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        # Fila 2: hitos de intención de compra/contacto
-        k5, k6, k7, k8 = st.columns(4)
-        k5.markdown(kpi_card("Vio comparables", _pct_uuids_que(["section_viewed_comparables"]),
-                             "section_viewed_comparables"), unsafe_allow_html=True)
-        k6.markdown(kpi_card("Eligió comparable", n_compar, "comparable_selected"),
-                    unsafe_allow_html=True)
-        k7.markdown(kpi_card("Click CTA venta", n_cta_venta, "cta_continuar_venta"),
-                    unsafe_allow_html=True)
-        k8.markdown(kpi_card("Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
-                    unsafe_allow_html=True)
+        # Fila 2
+        cols2 = st.columns(4)
+        for col, (lbl, val, sub) in zip(cols2, KPI_EVENTS[4:]):
+            _render_kpi_btn(col, lbl, val, sub)
 
-        # Selector horizontal para filtrar el Desglose por evento (drill-down).
-        # Mantiene las KPI cards limpias arriba y deja el control aparte.
-        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-        KPI_OPTIONS = ["Sin filtro", "Entraron landing", "Scroll 50%", "Scroll 75%",
-                       "Scroll 100%", "Vio comparables", "Eligió comparable",
-                       "Click CTA venta", "Habló con asesor"]
-        sel_kpi = st.radio(
-            "Drill-down al Desglose por evento",
-            KPI_OPTIONS, horizontal=True, index=0,
-            key="kpi_filter_radio",
-            help="Filtra el Desglose por nids cuyos UUIDs dispararon el evento elegido.",
-        )
-        st.session_state["kpi_filter"] = None if sel_kpi == "Sin filtro" else sel_kpi
+        if st.session_state.get("kpi_filter"):
+            st.caption(
+                f"Filtro activo en Desglose: nids cuyos UUIDs dispararon "
+                f"**{st.session_state['kpi_filter']}**. "
+                "Click otra vez en la card o en otra para cambiar."
+            )
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
