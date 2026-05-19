@@ -146,10 +146,6 @@ if df.empty:
 
 if "equipo_sellers" not in df.columns:
     df["equipo_sellers"] = pd.Series(dtype=str)
-equipos_all = sorted([
-    e for e in df["equipo_sellers"].dropna().astype(str).str.strip().unique()
-    if e and e.lower() != "nan"
-])
 
 # Normalizar variante: NULL → "(sin variante)" para que isin() funcione
 # directo en todas las secciones.
@@ -185,6 +181,16 @@ with st.sidebar:
         date_from, date_to = sel_range
     else:
         date_from, date_to = default_start, default_end
+
+    # Equipos disponibles = los que tienen al menos un row con fecha_aprobado
+    # dentro del rango actual. Los equipos sin datos en el rango no aportan
+    # información si los deseleccionas, así que no los mostramos.
+    _df_dates = pd.to_datetime(df["fecha_aprobado"], errors="coerce")
+    _in_range = (_df_dates >= pd.Timestamp(date_from)) & (_df_dates <= pd.Timestamp(date_to))
+    equipos_all = sorted([
+        e for e in df.loc[_in_range, "equipo_sellers"].dropna().astype(str).str.strip().unique()
+        if e and e.lower() != "nan"
+    ])
 
     st.markdown("### Variante")
     sel_variants = st.multiselect(
