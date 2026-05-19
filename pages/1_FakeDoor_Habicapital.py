@@ -762,9 +762,13 @@ def _hipoteca(row) -> tuple[str, str]:
     return "Sin dato", "Sin contactar"
 
 
-hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
-hip.columns = ["hipoteca_status", "hipoteca_fuente"]
-df_in = pd.concat([df_in, hip], axis=1)
+if df_in.empty:
+    df_in["hipoteca_status"] = pd.Series(dtype=str)
+    df_in["hipoteca_fuente"] = pd.Series(dtype=str)
+else:
+    hip = df_in.apply(_hipoteca, axis=1, result_type="expand")
+    hip.columns = ["hipoteca_status", "hipoteca_fuente"]
+    df_in = pd.concat([df_in, hip], axis=1)
 
 # Cierre operativo de hipoteca (estado confirmado por operación, no tocar):
 # Sobre los elegibles (Aplica=si), forzar la distribución 3/4/5 que el equipo
