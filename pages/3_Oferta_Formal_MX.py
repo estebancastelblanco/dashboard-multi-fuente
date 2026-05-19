@@ -644,113 +644,77 @@ else:
         n_asesor = _pct_uuids_que(["cta_hablar_asesor", "whatsapp_click"])
         pct = lambda n: f"{n/n_entraron*100:.0f}%" if n_entraron else "0%"
 
-        # CSS: hacer que los st.button del main content (NO sidebar) se vean
-        # como kpi_card. Sidebar buttons mantienen su estilo default.
+        KPI_EVENTS = [
+            ("entraron", "Entraron landing", n_entraron, "page_view_landing"),
+            ("scroll50", "Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})", "del que entró"),
+            ("scroll75", "Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})", "del que entró"),
+            ("scroll100", "Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})", "del que entró"),
+            ("vio_compar", "Vio comparables",
+             _pct_uuids_que(["section_viewed_comparables"]), "section_viewed_comparables"),
+            ("eligio_compar", "Eligió comparable", n_compar, "comparable_selected"),
+            ("cta_venta", "Click CTA venta", n_cta_venta, "cta_continuar_venta"),
+            ("asesor", "Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
+        ]
+
+        # Drill-down vía query_params (URL ?kpi=<slug>). Click en card recarga
+        # la página con el slug y el Desglose lee st.query_params para filtrar.
+        active_kpi_slug = st.query_params.get("kpi", "")
+        # Mapear slug → label legible para mostrar y filtrar
+        SLUG_TO_LABEL = {slug: label for slug, label, _, _ in KPI_EVENTS}
+        st.session_state["kpi_filter"] = SLUG_TO_LABEL.get(active_kpi_slug)
+
+        # CSS de las cards-link (idéntico a .kcard pero con hover y estado activo)
         st.markdown(f"""
         <style>
-        section[data-testid="stMain"] div[data-testid="stButton"] > button {{
-            background: {WHITE} !important;
-            border: none !important;
-            border-left: 4px solid {PRIMARY} !important;
-            border-radius: 10px !important;
-            box-shadow: 0 1px 6px rgba(46,17,71,0.09) !important;
-            padding: 14px 18px !important;
-            min-height: 100px !important;
-            text-align: left !important;
-            color: {DEEP} !important;
-            font-weight: 600 !important;
+        .kcard-link {{ text-decoration: none !important; display: block; }}
+        .kcard-link .kcard {{
+            cursor: pointer;
+            transition: all 0.15s ease;
+            min-height: 88px;
         }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button:hover {{
-            border-left-color: {ACCENT} !important;
-            border-color: transparent !important;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(46,17,71,0.16) !important;
-            color: {DEEP} !important;
+        .kcard-link:hover .kcard {{
+            border-left-color: {ACCENT};
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(46,17,71,0.16);
         }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button:focus,
-        section[data-testid="stMain"] div[data-testid="stButton"] > button:active {{
-            color: {DEEP} !important;
-            background: {WHITE} !important;
+        .kcard-link.active .kcard {{
+            border-left: 4px solid {DEEP};
+            outline: 2px solid {PRIMARY};
+            outline-offset: -2px;
         }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] {{
-            background: {WHITE} !important;
-            border: none !important;
-            border-left: 4px solid {DEEP} !important;
-            outline: 2px solid {PRIMARY} !important;
-            outline-offset: -2px !important;
-            color: {DEEP} !important;
-        }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button h2 {{
-            font-size: 1.75rem !important;
-            font-weight: 700 !important;
-            color: {PRIMARY} !important;
-            line-height: 1.1 !important;
-            margin: 0 0 4px 0 !important;
-        }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button h6 {{
-            font-size: 0.7rem !important;
-            color: #666 !important;
-            text-transform: uppercase;
-            letter-spacing: .06em;
-            margin: 2px 0 1px 0 !important;
-            font-weight: 600 !important;
-        }}
-        section[data-testid="stMain"] div[data-testid="stButton"] > button p {{
-            font-size: 0.75rem !important;
-            color: {MED} !important;
-            margin: 0 !important;
-        }}
+        .kcard-link.active .kval {{ color: {DEEP}; }}
         </style>
         """, unsafe_allow_html=True)
 
-        KPI_EVENTS = [
-            ("Entraron landing", n_entraron, "page_view_landing"),
-            ("Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})", "del que entró"),
-            ("Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})", "del que entró"),
-            ("Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})", "del que entró"),
-            ("Vio comparables", _pct_uuids_que(["section_viewed_comparables"]),
-             "section_viewed_comparables"),
-            ("Eligió comparable", n_compar, "comparable_selected"),
-            ("Click CTA venta", n_cta_venta, "cta_continuar_venta"),
-            ("Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
-        ]
-
-        if "kpi_filter" not in st.session_state:
-            st.session_state["kpi_filter"] = None
-
-        def _render_kpi_btn(col, label, value, sub):
-            is_active = st.session_state.get("kpi_filter") == label
-            # Texto multilínea: valor grande arriba, label en mayúsculas,
-            # subtítulo en gris (con markdown).
-            btn_text = (
-                f"## {value}\n"
-                f"###### {label.upper()}\n"
-                f"{sub}"
+        def _kpi_link(slug, label, value, sub):
+            is_active = active_kpi_slug == slug
+            href = "?" if is_active else f"?kpi={slug}"
+            active_cls = " active" if is_active else ""
+            return (
+                f'<a href="{href}" target="_self" class="kcard-link{active_cls}">'
+                f"<div class='kcard'>"
+                f"<div class='kval'>{value}</div>"
+                f"<div class='klbl'>{label}</div>"
+                f"<div class='ksub'>{sub}</div>"
+                f"</div></a>"
             )
-            if col.button(
-                btn_text, key=f"kpi_btn_{label}",
-                type="primary" if is_active else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state["kpi_filter"] = None if is_active else label
-                st.rerun()
 
         # Fila 1
         cols1 = st.columns(4)
-        for col, (lbl, val, sub) in zip(cols1, KPI_EVENTS[:4]):
-            _render_kpi_btn(col, lbl, val, sub)
+        for col, (slug, lbl, val, sub) in zip(cols1, KPI_EVENTS[:4]):
+            col.markdown(_kpi_link(slug, lbl, val, sub), unsafe_allow_html=True)
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
         # Fila 2
         cols2 = st.columns(4)
-        for col, (lbl, val, sub) in zip(cols2, KPI_EVENTS[4:]):
-            _render_kpi_btn(col, lbl, val, sub)
+        for col, (slug, lbl, val, sub) in zip(cols2, KPI_EVENTS[4:]):
+            col.markdown(_kpi_link(slug, lbl, val, sub), unsafe_allow_html=True)
 
         if st.session_state.get("kpi_filter"):
             st.caption(
                 f"Filtro activo en Desglose: nids cuyos UUIDs dispararon "
                 f"**{st.session_state['kpi_filter']}**. "
-                "Click otra vez en la card o en otra para cambiar."
+                "Click otra vez en la card para quitar el filtro."
             )
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
