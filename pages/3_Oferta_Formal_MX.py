@@ -1,4 +1,4 @@
-"""ABC Test Landing CO — A/B/C sobre conversión aprobado → cierre."""
+"""Oferta formal MX — A/B/C sobre conversión aprobado → cierre."""
 from __future__ import annotations
 
 import os
@@ -34,16 +34,16 @@ from src.styling import (
     DEEP, PRIMARY, MED, ACCENT, LIGHT, PALE, WHITE,
 )
 
-st.set_page_config(page_title="ABC Test Landing CO", layout="wide")
+st.set_page_config(page_title="Oferta formal MX", layout="wide")
 inject_base_css()
 
-EXPERIMENT = next(e for e in REGISTRY if e.slug == "abc-test-landing-co")
+EXPERIMENT = next(e for e in REGISTRY if e.slug == "oferta-formal-mx")
 
 st.markdown(
     f"<h1 style='color:{DEEP};font-size:1.5rem;font-weight:700;margin-bottom:0'>"
     f"{EXPERIMENT.title}</h1>"
     f"<div style='color:{MED};font-size:0.8rem;margin-bottom:20px'>"
-    f"Habi · CO · lanzado {EXPERIMENT.start_date} · A vs B vs C</div>",
+    f"Habi · MX · lanzado {EXPERIMENT.start_date} · A vs B vs C</div>",
     unsafe_allow_html=True,
 )
 
@@ -134,7 +134,7 @@ def _metric_block(_df: pd.DataFrame) -> dict:
                 cvr=cvr, cvr_rta=cvr_rta)
 
 
-def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str) -> go.Figure:
+def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | None = None) -> go.Figure:
     """Gráfico de barras (Aprobados/AprobadosRta/Cierre) + líneas (CVR/CVR Rta)
     agrupado por variante. df_filt ya debe venir filtrado por el rango de fechas."""
     rows = []
@@ -145,7 +145,7 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str) -> 
         rows.append(m)
     if not rows:
         fig = go.Figure()
-        fig.update_layout(title=title, height=420)
+        fig.update_layout(height=380, margin=dict(l=10, r=10, t=70, b=10))
         return fig
     g = pd.DataFrame(rows)
     fig = go.Figure()
@@ -183,14 +183,14 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str) -> 
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        title=dict(text=title, font=dict(size=13, color=DEEP)),
-        height=420, margin=dict(l=10, r=10, t=44, b=10),
+        height=420, margin=dict(l=10, r=10, t=70, b=10),
         barmode="group", bargap=0.18, bargroupgap=0.05,
         xaxis=dict(title="Variante", gridcolor="#ede8f5"),
         yaxis=dict(title="Aprobados | Aprobados rta | Cierre", gridcolor="#ede8f5"),
         yaxis2=dict(title="CVR | CVR Rta", overlaying="y", side="right",
                     ticksuffix="%", gridcolor="rgba(0,0,0,0)"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, x=0,
+                    font=dict(size=11)),
     )
     return fig
 
@@ -210,23 +210,22 @@ df_ofer = df_var[
 # ─────────────────────────────────────────────────────────────────────────────
 # Sección 1 · CVR por variante · fecha_aprobado y fecha_ofertado
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>CVR por variante — fecha aprobado</h2>", unsafe_allow_html=True)
-st.plotly_chart(
-    _bars_lines_by_variant(df_apro, "fecha_aprobado", "Por fecha de aprobación"),
-    use_container_width=True,
-)
+st.markdown("<h2>CVR por variante — fecha de aprobación</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.plotly_chart(_bars_lines_by_variant(df_apro, "fecha_aprobado"), use_container_width=True)
 
-st.markdown("<h2>CVR por variante — fecha ofertado</h2>", unsafe_allow_html=True)
-st.plotly_chart(
-    _bars_lines_by_variant(df_ofer, "fecha_ofertado", "Por fecha de ofertado"),
-    use_container_width=True,
-)
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>CVR por variante — fecha de ofertado</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.plotly_chart(_bars_lines_by_variant(df_ofer, "fecha_ofertado"), use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sección 2 · Funnel semanal por fecha de aprobación
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Funnel semanal — fecha aprobado</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Funnel semanal — fecha de aprobación</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
 if df_apro.empty:
     st.info("Sin aprobados en el rango seleccionado.")
@@ -270,13 +269,14 @@ else:
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        height=420, margin=dict(l=10, r=10, t=20, b=10),
+        height=440, margin=dict(l=10, r=10, t=70, b=10),
         barmode="group", bargap=0.18, bargroupgap=0.05,
         xaxis=dict(title="Semana de fecha aprobado", gridcolor="#ede8f5"),
         yaxis=dict(title="Aprobados | Aprobados rta | Cierre", gridcolor="#ede8f5"),
         yaxis2=dict(title="CVR | CVR Rta", overlaying="y", side="right",
                     ticksuffix="%", gridcolor="rgba(0,0,0,0)"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, x=0,
+                    font=dict(size=11)),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -284,7 +284,9 @@ else:
 # ─────────────────────────────────────────────────────────────────────────────
 # Sección 3 · Tabla desglose
 # ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown(f"<h2>Desglose ({len(df_apro):,})</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 table = df_apro.copy()
 table["Cierre"] = table["fecha_cierre_efectiva"].notna().map({True: "Sí", False: "No"})

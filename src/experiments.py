@@ -47,16 +47,16 @@ REGISTRY: list[Experiment] = [
         },
     ),
     Experiment(
-        slug="abc-test-landing-co",
-        title="ABC Test Landing CO",
+        slug="oferta-formal-mx",
+        title="Oferta formal MX",
         start_date="2026-05-19",
         end_date=None,
         design_doc_url="https://docs.google.com/presentation/d/1k0vSlnw3-tc7JmVUciI50ZYhOZUqnI-ymxkGrQM0UUo/edit?slide=id.g393c5075122_1_18",
         results_doc_url="https://datastudio.google.com/u/0/reporting/bff7ce66-e5a9-474c-84bf-5b1d20229970/page/p_erbc1es51d",
-        page="pages/3_ABC_Test_Landing_CO.py",
+        page="pages/3_Oferta_Formal_MX.py",
         description=(
-            "Experimento A/B/C de landing en Colombia. Mide CVR de aprobado→cierre "
-            "y la proporción de aprobados con respuesta del cliente por variante."
+            "Experimento A/B/C en MX. Mide CVR de aprobado→cierre y la proporción "
+            "de aprobados con respuesta del cliente por variante."
         ),
         attachments=[],
         external_links=[
