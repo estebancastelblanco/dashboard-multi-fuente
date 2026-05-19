@@ -578,9 +578,12 @@ else:
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
     # Distribución sin buckets: para cada N exacto (1, 2, 3, ...), cuántos UUIDs
-    dist = counts_per_uuid.value_counts().sort_index().reset_index()
-    dist.columns = ["Veces que abrió", "UUIDs"]
-    dist["Veces que abrió"] = dist["Veces que abrió"].astype(int)
+    dist_series = counts_per_uuid.value_counts().sort_index()
+    dist_series.index = dist_series.index.astype(int)
+    dist = pd.DataFrame({
+        "Veces que abrió": dist_series.index.astype(int),
+        "UUIDs": dist_series.values.astype(int),
+    })
 
     fig_dist = go.Figure(go.Bar(
         x=dist["Veces que abrió"].astype(str), y=dist["UUIDs"],
