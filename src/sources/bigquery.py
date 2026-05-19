@@ -215,3 +215,89 @@ def fetch_sellers_credit_breakdown(nids: list[int] | None = None) -> pd.DataFram
     if not frames:
         return pd.DataFrame(columns=["nid", "linea_negocio", "cedula_cliente"])
     return pd.concat(frames, ignore_index=True).drop_duplicates()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ABC Test Landing CO · query simplificada para el dashboard
+# Omite las tablas im-main-prod (sin permisos) y usa la versión CO de cierres.
+# ─────────────────────────────────────────────────────────────────────────────
+def fetch_abc_test_landing_co() -> pd.DataFrame:
+    """Tabla maestra del experimento ABC test landing CO.
+
+    Columnas finales:
+      nid, abc_test_landing_co, ab_test_landing, estado_aprobado,
+      fecha_aprobado, fecha_aprobado_semana, fecha_cierre, v_fecha_promesa,
+      fecha_cierre_efectiva, fecha_ofertado, fue_ofertado, categoria_ancla
+    """
+    sql = """
+    WITH
+    base_ofertas AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        DATE(fecha_aprobado) AS fecha_aprobado,
+        DATE(fecha_cierre)   AS fecha_cierre,
+        estado_aprobado
+      FROM `papyrus-data.habi_wh.detalle_ofertas_col`
+      WHERE fecha_aprobado IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY nid, DATE(fecha_aprobado) ORDER BY fecha_aprobado DESC
+      ) = 1
+    ),
+    base_hubspot AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        abc_test_landing_co,
+        ab_test_landing,
+        SAFE_CAST(valor_negociado AS FLOAT64) AS valor_negociado,
+        SAFE_CAST(ask_price AS FLOAT64)       AS customer_price,
+        SAFE_CAST(precio_ancla AS FLOAT64)    AS precio_ancla_hs,
+        SAFE_CAST(oferta_final_prestamo_mx_calculada AS FLOAT64) AS oferta_final_calculada
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE abc_test_landing_co IS NOT NULL
+    ),
+    pasaron_ofertados AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(fecha) AS fecha_ofertado
+      FROM `sellers-main-prod.hubspot.historical`
+      WHERE propiedad = 'dealstage' AND valor = '1066441580'
+      GROUP BY 1
+    ),
+    base_cierres_co AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(DATE(fecha_de_firma_promesa_compra_venta_docusign)) AS v_fecha_promesa
+      FROM `papyrus-master.operations_sellers_co_dwh.sellers_promesa_compraventa_co_dwh`
+      WHERE fecha_de_firma_promesa_compra_venta_docusign IS NOT NULL
+      GROUP BY 1
+    )
+    SELECT
+      o.nid,
+      hs.abc_test_landing_co,
+      hs.ab_test_landing,
+      o.estado_aprobado,
+      o.fecha_aprobado,
+      DATE_TRUNC(o.fecha_aprobado, WEEK(MONDAY)) AS fecha_aprobado_semana,
+      o.fecha_cierre,
+      c.v_fecha_promesa,
+      IFNULL(o.fecha_cierre, c.v_fecha_promesa) AS fecha_cierre_efectiva,
+      DATE(po.fecha_ofertado) AS fecha_ofertado,
+      IF(po.nid IS NOT NULL, 'Ofertado', 'No ofertado') AS fue_ofertado,
+      CASE
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) IS NULL THEN NULL
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) > -0.16 THEN 'Baja diferencia (20%)'
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) >= -0.30 THEN 'Media diferencia (13%)'
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) < -0.30 THEN 'Alta diferencia (5%)'
+        ELSE NULL
+      END AS categoria_ancla
+    FROM base_ofertas o
+    INNER JOIN base_hubspot hs ON hs.nid = o.nid
+    LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
+    LEFT JOIN base_cierres_co c ON c.nid = o.nid
+    """
+    df = _client().query(sql).to_dataframe()
+    for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
+                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
