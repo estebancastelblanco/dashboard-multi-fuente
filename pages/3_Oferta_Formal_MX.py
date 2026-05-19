@@ -59,13 +59,8 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_oferta_formal_data_v2() -> pd.DataFrame:
-    """v2: incluye LEFT JOIN base_hubspot + country='México' + equipo_sellers.
-
-    Cambiar el nombre fuerza invalidación del cache key cuando hubo cambios
-    estructurales en la query. v1 antiguo (load_abc_data) puede quedar en
-    disco pero no se carga porque ya no hay calls a él.
-    """
+def load_oferta_formal_data_v3() -> pd.DataFrame:
+    """v3: agrega columna pipeline desde hubspot.deals."""
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -75,7 +70,7 @@ def load_oferta_formal_data_v2() -> pd.DataFrame:
 
 
 # Alias para retro-compat con resto del código
-load_abc_data = load_oferta_formal_data_v2
+load_abc_data = load_oferta_formal_data_v3
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
@@ -147,6 +142,19 @@ if df.empty:
 if "equipo_sellers" not in df.columns:
     df["equipo_sellers"] = pd.Series(dtype=str)
 
+# Mapeo de pipeline_id → label legible. Solo nos interesan los 2 pipelines
+# operativos del experimento; cualquier otro pipeline queda como "(otro)"
+# y por default no se muestra.
+PIPELINE_LABELS = {
+    "731899270": "Sellers - Market Maker MX (NUEVO)",
+    "638550350": "Nuevo - Inmobiliaria MX",
+}
+if "pipeline" not in df.columns:
+    df["pipeline"] = pd.Series(dtype=str)
+df["pipeline_label"] = (
+    df["pipeline"].astype(str).map(PIPELINE_LABELS).fillna("(otro)")
+)
+
 # Normalizar variante: NULL → "(sin variante)" para que isin() funcione
 # directo en todas las secciones.
 df["abc_test_landing_co"] = df["abc_test_landing_co"].fillna(NULL_VARIANT_LABEL)
@@ -212,6 +220,14 @@ with st.sidebar:
         label_visibility="collapsed",
         help="Filtra por equipo_sellers de detalle_ofertas_mx.",
     )
+
+    st.markdown("### Pipeline")
+    pipeline_opts = list(PIPELINE_LABELS.values())
+    sel_pipelines = st.multiselect(
+        "pipelines", pipeline_opts, default=pipeline_opts,
+        label_visibility="collapsed",
+        help="Solo los 2 pipelines operativos: Sellers MM MX (NUEVO) e Inmobiliaria MX (NUEVO).",
+    )
     st.markdown("---")
 
 
@@ -226,6 +242,8 @@ if sel_nid:
     df = df[df["nid"].astype(str) == sel_nid].copy()
 if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
+# Pipeline siempre se aplica: default = los 2 operativos, excluye "(otro)"
+df = df[df["pipeline_label"].isin(sel_pipelines)].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
