@@ -77,13 +77,46 @@ def load_landing_events() -> pd.DataFrame:
         return pd.DataFrame(columns=["uuid", "events", "first_seen", "last_seen"])
 
 
+LANDING_SHEET_ID = "1_EMQesd_n67wSqReYaTdJtSd3uvZsb7GXPRD6LyrJN4"
+import re
+_UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
+@st.cache_data(ttl=120, show_spinner="Sheets · logs de envíos…")
+def load_landing_logs() -> pd.DataFrame:
+    """Filas del Sheet LOGS donde la URL apunta a ofertas.tuhabi.mx."""
+    try:
+        from src.sources import gsheets as gs_src
+        df = gs_src.fetch_tab("LOGS", sheet_id=LANDING_SHEET_ID)
+    except Exception as exc:
+        st.warning(f"Sheets logs: {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    mask = df.get("base_url", pd.Series(dtype=str)).astype(str).str.contains(
+        "ofertas.tuhabi.mx", case=False, na=False
+    )
+    df = df[mask].copy()
+
+    def _uuid(row):
+        for col in ("Deal_uuid", "base_url", "full_url", "url"):
+            m = _UUID_RX.search(str(row.get(col, "") or ""))
+            if m:
+                return m.group(1).lower()
+        return None
+
+    df["uuid"] = df.apply(_uuid, axis=1)
+    df = df[df["uuid"].notna()].copy()
+    return df
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — filtros
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     if st.button("Actualizar datos", use_container_width=True,
                  help="Refresca el cache de BigQuery."):
-        for loader in (load_abc_data, load_landing_events):
+        for loader in (load_abc_data, load_landing_events, load_landing_logs):
             try:
                 loader.clear()
             except Exception:
@@ -234,19 +267,19 @@ df_ofer = df_var[
 # ─────────────────────────────────────────────────────────────────────────────
 # Sección 1 · CVR por variante · fecha_aprobado y fecha_ofertado
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>CVR por variante — fecha de aprobación</h2>", unsafe_allow_html=True)
-st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-st.plotly_chart(
-    _bars_lines_by_variant(df_apro, "fecha_aprobado"),
-    use_container_width=True, key="chart_cvr_aprobado",
-)
-
-st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>CVR por variante — fecha de ofertado</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.plotly_chart(
     _bars_lines_by_variant(df_ofer, "fecha_ofertado"),
     use_container_width=True, key="chart_cvr_ofertado",
+)
+
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>CVR por variante — fecha de aprobación</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.plotly_chart(
+    _bars_lines_by_variant(df_apro, "fecha_aprobado"),
+    use_container_width=True, key="chart_cvr_aprobado",
 )
 
 
@@ -261,7 +294,8 @@ if df_apro.empty:
     st.info("Sin aprobados en el rango seleccionado.")
 else:
     rows = []
-    for week, sub in df_apro.groupby(df_apro["fecha_aprobado"].dt.to_period("W-MON")):
+    # W-TUE = semana que termina martes → empieza miércoles (alineado con Looker WEEK(WEDNESDAY))
+    for week, sub in df_apro.groupby(df_apro["fecha_aprobado"].dt.to_period("W-TUE")):
         m = _metric_block(sub)
         m["semana_date"] = week.start_time.date()
         rows.append(m)
@@ -334,7 +368,165 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sección 3 · Tabla desglose
+# Sección 3 · Distribución por variante + funnel de usabilidad de la landing
+# ─────────────────────────────────────────────────────────────────────────────
+df_events = load_landing_events()
+df_logs = load_landing_logs()
+
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Distribución por variante</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+v_counts = (
+    df_var.drop_duplicates("nid")["abc_test_landing_co"]
+    .value_counts().reindex(sel_variants).fillna(0).astype(int).reset_index()
+)
+v_counts.columns = ["Variante", "N"]
+
+col_pie, col_pie_int = st.columns(2)
+with col_pie:
+    if v_counts["N"].sum() == 0:
+        st.info("Sin deals para las variantes seleccionadas.")
+    else:
+        fig_pie = go.Figure(go.Pie(
+            labels=v_counts["Variante"], values=v_counts["N"],
+            hole=0.42, marker_colors=[PRIMARY, ACCENT, LIGHT][:len(v_counts)],
+            textinfo="label+percent+value", textfont_size=12,
+        ))
+        fig_pie.update_layout(
+            paper_bgcolor=WHITE, showlegend=False,
+            title=dict(text="Variante · universo del experimento",
+                       font=dict(size=13, color=DEEP)),
+            height=320, margin=dict(l=5, r=5, t=44, b=5),
+        )
+        st.plotly_chart(fig_pie, use_container_width=True, key="pie_variante")
+
+# Interacciones por UUID — cruce variante × eventos BQ
+with col_pie_int:
+    deal_uuids_var = set(df_var["deal_uuid"].dropna().astype(str).str.lower())
+    eventos_por_var = []
+    for v in sel_variants:
+        sub_deals = df_var[df_var["abc_test_landing_co"] == v]
+        uuids_v = set(sub_deals["deal_uuid"].dropna().astype(str).str.lower())
+        eventos_v = df_events[df_events["uuid"].isin(uuids_v)]["events"].sum() if not df_events.empty else 0
+        eventos_por_var.append({"Variante": v, "Eventos": int(eventos_v)})
+    g_ev = pd.DataFrame(eventos_por_var)
+    if g_ev["Eventos"].sum() == 0:
+        st.info("Sin eventos en BQ para las variantes seleccionadas.")
+    else:
+        fig_ev = go.Figure(go.Bar(
+            x=g_ev["Variante"], y=g_ev["Eventos"],
+            marker_color=[PRIMARY, ACCENT, LIGHT][:len(g_ev)],
+            text=g_ev["Eventos"], textposition="outside",
+        ))
+        fig_ev.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            title=dict(text="Eventos de landing por variante",
+                       font=dict(size=13, color=DEEP)),
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=320, margin=dict(l=10, r=10, t=44, b=10),
+            xaxis=dict(title="Variante", gridcolor="#ede8f5"),
+            yaxis=dict(title="N eventos", gridcolor="#ede8f5"),
+        )
+        st.plotly_chart(fig_ev, use_container_width=True, key="bar_eventos_var")
+
+
+st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# Enviados = filas del Sheet LOGS (envíos registrados)
+# Abiertos = UUIDs con al menos 1 evento de página en BQ
+# Interacciones = total de eventos de página en BQ (con duplicados, cuántas
+# veces el cliente abrió o navegó dentro de la landing)
+n_enviados = int(df_logs["uuid"].nunique()) if not df_logs.empty else 0
+
+# Cruzar con deals que tengan variante asignada (universo del experimento)
+universe_uuids = set(df_var["deal_uuid"].dropna().astype(str).str.lower())
+events_in_universe = df_events[df_events["uuid"].isin(universe_uuids)] if not df_events.empty else df_events
+n_abrieron = int(events_in_universe["uuid"].nunique()) if not events_in_universe.empty else 0
+n_interacciones = int(events_in_universe["events"].sum()) if not events_in_universe.empty else 0
+
+f_labels = ["Enviados", "Abrieron landing", "Interacciones (eventos)"]
+f_vals = [n_enviados, n_abrieron, n_interacciones]
+f_colors = [DEEP, PRIMARY, ACCENT]
+f_text = [f"{v:,}" for v in f_vals]
+nonzero = [v for v in f_vals if v > 0]
+use_log_f = (max(f_vals) if f_vals else 0) > 50 and (min(nonzero) if nonzero else 0) > 0
+fig_funnel = go.Figure(go.Bar(
+    x=f_vals, y=f_labels, orientation="h",
+    marker_color=f_colors, text=f_text,
+    textposition="outside", textfont=dict(size=11, color=DEEP),
+))
+fig_funnel.update_layout(
+    paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+    height=300, margin=dict(l=10, r=80, t=10, b=10),
+    xaxis=dict(type="log" if use_log_f else "linear",
+               title="Clientes" + (" (log)" if use_log_f else ""),
+               gridcolor="#ede8f5", tickformat=",d"),
+    yaxis=dict(autorange="reversed"),
+)
+st.plotly_chart(fig_funnel, use_container_width=True, key="funnel_landing")
+st.caption(
+    f"Enviados: Sheet LOGS filtrado por dominio `ofertas.tuhabi.mx` ({n_enviados:,} UUIDs únicos). "
+    f"Abrieron: UUIDs con al menos 1 evento en BQ ({n_abrieron:,}). "
+    f"Interacciones: total de page views en BQ ({n_interacciones:,})."
+)
+
+
+# KPIs y distribución de aperturas por UUID
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Interacciones por cliente</h2>", unsafe_allow_html=True)
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+if events_in_universe.empty:
+    st.info("Sin eventos en BQ para el universo seleccionado.")
+else:
+    eventos_per_uuid = events_in_universe["events"].astype(int)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(kpi_card("UUIDs con eventos", int(len(eventos_per_uuid)), "abrieron al menos 1 vez"),
+                unsafe_allow_html=True)
+    k2.markdown(kpi_card("Eventos totales", int(eventos_per_uuid.sum()), "page views"),
+                unsafe_allow_html=True)
+    k3.markdown(kpi_card("Promedio", f"{eventos_per_uuid.mean():.1f}", "eventos por UUID"),
+                unsafe_allow_html=True)
+    k4.markdown(kpi_card("Mediana", f"{eventos_per_uuid.median():.0f}", "eventos por UUID"),
+                unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    # Distribución del número de aperturas (1, 2, 3+, etc.)
+    bins_def = [(1, "1 vez"), (2, "2"), (3, "3"), (5, "4-5"), (10, "6-10"), (1000, "11+")]
+
+    def _bucket(n):
+        for limit, label in bins_def:
+            if n <= limit:
+                return label
+        return "11+"
+
+    dist = pd.Series([_bucket(n) for n in eventos_per_uuid]).value_counts().reindex(
+        [b[1] for b in bins_def], fill_value=0
+    ).reset_index()
+    dist.columns = ["Veces que abrió", "UUIDs"]
+
+    fig_dist = go.Figure(go.Bar(
+        x=dist["Veces que abrió"], y=dist["UUIDs"],
+        marker_color=PRIMARY, text=dist["UUIDs"], textposition="outside",
+    ))
+    fig_dist.update_layout(
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        title=dict(text="Distribución de aperturas por cliente",
+                   font=dict(size=13, color=DEEP)),
+        height=320, margin=dict(l=10, r=10, t=44, b=10),
+        xaxis=dict(title="N° de veces que abrió", gridcolor="#ede8f5"),
+        yaxis=dict(title="UUIDs", gridcolor="#ede8f5"),
+    )
+    st.plotly_chart(fig_dist, use_container_width=True, key="dist_aperturas")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sección 4 · Tabla desglose
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown(f"<h2>Desglose ({len(df_apro):,})</h2>", unsafe_allow_html=True)
