@@ -263,9 +263,16 @@ else:
     rows = []
     for week, sub in df_apro.groupby(df_apro["fecha_aprobado"].dt.to_period("W-MON")):
         m = _metric_block(sub)
-        m["semana"] = week.start_time.date()
+        m["semana_date"] = week.start_time.date()
         rows.append(m)
-    g = pd.DataFrame(rows).sort_values("semana")
+    g = pd.DataFrame(rows).sort_values("semana_date")
+    # Etiqueta categórica en español ("25 mar 2026") — usar string evita el
+    # bug de Plotly que no agrupa barras cuando el eje X es type=date.
+    _meses_es = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
+                 7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
+    g["semana"] = g["semana_date"].apply(
+        lambda d: f"{d.day} {_meses_es[d.month]} {d.year}"
+    )
     fig = go.Figure()
     fig.add_trace(go.Bar(
         name="Aprobados", x=g["semana"], y=g["aprobados"],
@@ -286,14 +293,14 @@ else:
         name="CVR", x=g["semana"], y=g["cvr"] * 100,
         mode="lines+markers", line=dict(color=COLOR_CVR, width=3),
         marker=dict(size=11),
-        hovertemplate="%{x|%d %b %Y}<br>CVR: %{y:.2f}%<extra></extra>",
+        hovertemplate="%{x}<br>CVR: %{y:.2f}%<extra></extra>",
         yaxis="y2",
     ))
     fig.add_trace(go.Scatter(
         name="CVR Rta", x=g["semana"], y=g["cvr_rta"] * 100,
         mode="lines+markers", line=dict(color=COLOR_CVR_RTA, width=3),
         marker=dict(size=11),
-        hovertemplate="%{x|%d %b %Y}<br>CVR Rta: %{y:.2f}%<extra></extra>",
+        hovertemplate="%{x}<br>CVR Rta: %{y:.2f}%<extra></extra>",
         yaxis="y2",
     ))
     for _, row in g.iterrows():
@@ -313,8 +320,10 @@ else:
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
         height=440, margin=dict(l=10, r=10, t=70, b=10),
-        barmode="group", bargap=0.18, bargroupgap=0.05,
-        xaxis=dict(title="Semana de fecha aprobado", gridcolor="#ede8f5"),
+        barmode="group", bargap=0.25, bargroupgap=0.05,
+        xaxis=dict(title="Semana de fecha aprobado", gridcolor="#ede8f5",
+                   type="category", categoryorder="array",
+                   categoryarray=list(g["semana"])),
         yaxis=dict(title="Aprobados | Aprobados rta | Cierre", gridcolor="#ede8f5"),
         yaxis2=dict(title="CVR | CVR Rta", overlaying="y", side="right",
                     ticksuffix="%", gridcolor="rgba(0,0,0,0)"),
