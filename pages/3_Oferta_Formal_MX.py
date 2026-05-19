@@ -241,8 +241,9 @@ with st.sidebar:
     sel_pipelines = st.multiselect(
         "pipelines", pipeline_opts, default=pipeline_default,
         label_visibility="collapsed",
-        help="Por default solo los 2 pipelines operativos. Agrega '(otro)' para "
-             "incluir deals fuera de esos pipelines (necesario si quieres ver '(sin variante)').",
+        help="Default: 2 pipelines operativos. Los deals sin pipeline asignado "
+             "(= '(sin variante)') SIEMPRE pasan. Agrega '(otro)' para incluir "
+             "deals con un pipeline distinto a los 2 operativos.",
     )
     st.markdown("---")
 
@@ -258,8 +259,11 @@ if sel_nid:
     df = df[df["nid"].astype(str) == sel_nid].copy()
 if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
-# Pipeline siempre se aplica: default = los 2 operativos, excluye "(otro)"
-df = df[df["pipeline_label"].isin(sel_pipelines)].copy()
+# Pipeline: los rows con pipeline NULL (= "(sin variante)" del LEFT JOIN sin
+# match en base_hubspot) SIEMPRE pasan, independiente de la selección. El
+# filtro solo descarta rows con pipeline asignado que NO esté en sel_pipelines.
+_pipeline_null = df["pipeline"].isna() | (df["pipeline"].astype(str).str.lower().isin(["", "nan", "none"]))
+df = df[_pipeline_null | df["pipeline_label"].isin(sel_pipelines)].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
