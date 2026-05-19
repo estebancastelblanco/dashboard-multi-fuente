@@ -624,6 +624,11 @@ with st.sidebar:
     st.markdown("---")
 
 
+# Helper: True si el usuario deseleccionó alguna opción (= filtro activo).
+def _applied(sel: list, all_opts: list) -> bool:
+    return bool(sel) and len(sel) < len(all_opts)
+
+
 # Aplicar filtros — el universo entero queda intacto. Solo se narrow cuando
 # el usuario explícitamente deselecciona variantes (default = AH y BH ambos).
 df_hs_f = df_hs.copy()
@@ -697,9 +702,6 @@ lead_uuid_set = set(df["uuid_str"].dropna().astype(str))
 
 # Pipeline = TODOS los leads del Sheet por defecto. Los filtros narrow,
 # pero leads sin match en HS solo se dropean cuando un filtro HS está activo.
-def _applied(sel: list, all_opts: list) -> bool:
-    return bool(sel) and len(sel) < len(all_opts)
-
 df_in = df.copy()
 if _applied(sel_variantes, variantes_all):
     df_in = df_in[
