@@ -452,6 +452,24 @@ df_experian_2026 = load_experian_scores_2026()
 df_experian_recent = load_experian_recent_scores()
 df_escriturados_age = load_escriturados_age_score()
 
+# Cargar categorías cliente del universo entero (no filtrado) para alimentar
+# el multiselect del sidebar. Se vuelve a filtrar más abajo según df_hs_f.
+nids_universo = (
+    tuple(sorted(df_hs["nid"].dropna().astype(int).unique().tolist()))
+    if not df_hs.empty and "nid" in df_hs.columns else tuple()
+)
+try:
+    df_cat_all = load_client_categories(nids_universo) if nids_universo else pd.DataFrame(columns=["nid", "motivo_venta_string"])
+except Exception:
+    df_cat_all = pd.DataFrame(columns=["nid", "motivo_venta_string"])
+df_cat_all["categoria_clean"] = (
+    df_cat_all.get("motivo_venta_string", pd.Series(dtype=str))
+    .fillna("(sin valor)").astype(str).str.strip().replace("", "(sin valor)")
+)
+categorias_all = (
+    df_cat_all["categoria_clean"].value_counts().index.tolist() if not df_cat_all.empty else []
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Decode internal IDs → labels en HubSpot
@@ -554,6 +572,13 @@ with st.sidebar:
 
     st.markdown("### Estado del Negocio")
     sel_estados = st.multiselect("estados", estados_all, default=estados_all, label_visibility="collapsed")
+
+    st.markdown("### Categoría cliente")
+    sel_categorias = st.multiselect(
+        "categorias", categorias_all, default=categorias_all,
+        label_visibility="collapsed",
+        help="motivo_venta_string en BigQuery · seller_digital_co_recepcionista_mm",
+    )
 
     st.markdown("### Elegibilidad")
     sel_elegibilidad = st.radio(
@@ -1471,25 +1496,16 @@ else:
                 .str.strip()
                 .replace("", "(sin valor)")
             )
+            if _applied(sel_categorias, categorias_all):
+                df_cat = df_cat[df_cat["categoria_clean"].isin(sel_categorias)]
+
             counts_all = df_cat["categoria_clean"].value_counts().reset_index()
             counts_all.columns = ["Categoría", "N"]
 
-            cat_options = counts_all["Categoría"].tolist()
-            sel_categorias = st.multiselect(
-                "Filtrar categorías",
-                cat_options,
-                default=cat_options,
-                key="categorias_cliente_filter",
-                help="Selecciona qué categorías mostrar en el gráfico.",
-            )
-
-            counts = counts_all[counts_all["Categoría"].isin(sel_categorias)].copy()
-            df_cat_view = df_cat[df_cat["categoria_clean"].isin(sel_categorias)]
-
-            if counts.empty:
-                st.info("No hay categorías seleccionadas.")
+            if counts_all.empty:
+                st.info("No hay categorías para los filtros actuales.")
             else:
-                counts = counts.sort_values("N", ascending=True)
+                counts = counts_all.head(10).sort_values("N", ascending=True)
                 counts["Categoría corta"] = counts["Categoría"].apply(_short_label)
 
                 fig_cat = go.Figure(go.Bar(
@@ -1518,8 +1534,8 @@ else:
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
                 st.caption(
-                    f"{len(counts)} de {len(counts_all)} categorías · "
-                    f"{int(df_cat_view['nid'].nunique())} nids visibles en "
+                    f"Top 10 de {len(counts_all)} categorías · "
+                    f"{int(df_cat['nid'].nunique())} nids en "
                     "`seller_digital_co_recepcionista_mm`."
                 )
 
