@@ -1175,11 +1175,14 @@ else:
                     age_df = df_escriturados_age.copy()
                     product_order_age = [p for p in product_order if p in set(age_df["producto"].astype(str))]
                     corr = age_df["edad"].corr(age_df["score_crediticio"])
-                    k1, k2, k3, k4 = st.columns(4)
+                    n_above_720 = int((age_df["score_crediticio"] >= 720).sum())
+                    pct_above_720 = (n_above_720 / len(age_df) * 100) if len(age_df) else 0.0
+                    k1, k2, k3, k4, k5 = st.columns(5)
                     k1.markdown(kpi_card("Personas", int(len(age_df)), "edad + score"), unsafe_allow_html=True)
                     k2.markdown(kpi_card("Edad promedio", f"{age_df['edad'].mean():.1f}", "años"), unsafe_allow_html=True)
                     k3.markdown(kpi_card("Score promedio", f"{age_df['score_crediticio'].mean():.0f}", "Experian"), unsafe_allow_html=True)
-                    k4.markdown(kpi_card("Correlación", f"{0.0 if pd.isna(corr) else corr:.2f}", "edad vs score"), unsafe_allow_html=True)
+                    k4.markdown(kpi_card("Score ≥ 720", n_above_720, f"{pct_above_720:.1f}% del universo"), unsafe_allow_html=True)
+                    k5.markdown(kpi_card("Correlación", f"{0.0 if pd.isna(corr) else corr:.2f}", "edad vs score"), unsafe_allow_html=True)
 
                     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -1460,18 +1463,33 @@ else:
             if df_cat.empty:
                 st.info("No hubo categorías cruzables con los `nid` visibles del FakeDoor.")
                 df_cat = pd.DataFrame(columns=["nid", "motivo_venta_string"])
-            counts = (
+
+            df_cat["categoria_clean"] = (
                 df_cat["motivo_venta_string"]
                 .fillna("(sin valor)")
                 .astype(str)
                 .str.strip()
                 .replace("", "(sin valor)")
-                .value_counts()
-                .reset_index()
             )
-            if not counts.empty:
-                counts.columns = ["Categoría", "N"]
-                counts = counts.head(10).sort_values("N", ascending=True)
+            counts_all = df_cat["categoria_clean"].value_counts().reset_index()
+            counts_all.columns = ["Categoría", "N"]
+
+            cat_options = counts_all["Categoría"].tolist()
+            sel_categorias = st.multiselect(
+                "Filtrar categorías",
+                cat_options,
+                default=cat_options,
+                key="categorias_cliente_filter",
+                help="Selecciona qué categorías mostrar en el gráfico.",
+            )
+
+            counts = counts_all[counts_all["Categoría"].isin(sel_categorias)].copy()
+            df_cat_view = df_cat[df_cat["categoria_clean"].isin(sel_categorias)]
+
+            if counts.empty:
+                st.info("No hay categorías seleccionadas.")
+            else:
+                counts = counts.sort_values("N", ascending=True)
                 counts["Categoría corta"] = counts["Categoría"].apply(_short_label)
 
                 fig_cat = go.Figure(go.Bar(
@@ -1500,7 +1518,8 @@ else:
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
                 st.caption(
-                    f"Top 10 categorías · {int(df_cat['nid'].nunique())} nids con categoría en "
+                    f"{len(counts)} de {len(counts_all)} categorías · "
+                    f"{int(df_cat_view['nid'].nunique())} nids visibles en "
                     "`seller_digital_co_recepcionista_mm`."
                 )
 
