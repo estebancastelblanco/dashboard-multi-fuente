@@ -311,15 +311,17 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
 
 
 def fetch_oferta_formal_envios_wa() -> pd.DataFrame:
-    """Envíos de WhatsApp de Oferta formal MX.
+    """Envíos de WhatsApp de Oferta formal MX que efectivamente llegaron.
 
-    Filtra por el template del experimento. Devuelve una fila por mensaje
-    enviado con nid y message_status (read/delivered/undelivered/rejected).
+    Filtra por el template del experimento Y por message_status IN
+    ('read','delivered') — solo cuenta mensajes que el cliente recibió
+    (excluye undelivered y rejected).
     """
     sql = """
     SELECT nid, message_status, created_at
     FROM `sellers-main-prod.mx_rds_staging.habi_notifications_whatsapp_messages`
     WHERE template_id = "envio_oferta_liquidez_mx_estebancastelblanco_60326"
+      AND message_status IN ('read', 'delivered')
     """
     df = _client().query(sql).to_dataframe()
     if not df.empty:

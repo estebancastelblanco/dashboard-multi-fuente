@@ -94,13 +94,17 @@ def load_landing_tracks() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · envíos WhatsApp…", persist="disk")
-def load_envios_wa() -> pd.DataFrame:
-    """Envíos de WhatsApp del template de Oferta formal MX."""
+def load_envios_wa_v2() -> pd.DataFrame:
+    """v2: filtrado a message_status IN ('read','delivered')."""
     try:
         return bq_src.fetch_oferta_formal_envios_wa()
     except Exception as exc:
         st.warning(f"BigQuery envíos WA: {type(exc).__name__}: {exc}")
         return pd.DataFrame(columns=["nid", "message_status", "created_at"])
+
+
+# Alias para retro-compat
+load_envios_wa = load_envios_wa_v2
 
 
 LANDING_SHEET_ID = "1_EMQesd_n67wSqReYaTdJtSd3uvZsb7GXPRD6LyrJN4"
@@ -232,11 +236,13 @@ with st.sidebar:
     )
 
     st.markdown("### Pipeline")
-    pipeline_opts = list(PIPELINE_LABELS.values())
+    pipeline_opts = list(PIPELINE_LABELS.values()) + ["(otro)"]
+    pipeline_default = list(PIPELINE_LABELS.values())  # los 2 operativos
     sel_pipelines = st.multiselect(
-        "pipelines", pipeline_opts, default=pipeline_opts,
+        "pipelines", pipeline_opts, default=pipeline_default,
         label_visibility="collapsed",
-        help="Solo los 2 pipelines operativos: Sellers MM MX (NUEVO) e Inmobiliaria MX (NUEVO).",
+        help="Por default solo los 2 pipelines operativos. Agrega '(otro)' para "
+             "incluir deals fuera de esos pipelines (necesario si quieres ver '(sin variante)').",
     )
     st.markdown("---")
 
