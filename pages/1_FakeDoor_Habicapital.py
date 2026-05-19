@@ -640,6 +640,20 @@ if not df_hs_f.empty:
         df_hs_f = df_hs_f[df_hs_f["oportunidad_del_negocio_label"].isin(sel_oport) | df_hs_f["oportunidad_del_negocio_label"].isna()]
     if len(sel_estados) < len(estados_all):
         df_hs_f = df_hs_f[df_hs_f["estado_label"].isin(sel_estados) | df_hs_f["estado_label"].isna()]
+    # Filtro por categoría cliente (motivo_venta_string en BQ). Como un nid
+    # puede tener varias categorías, incluimos el nid si AL MENOS UNA de sus
+    # categorías está en la selección. nids sin categoría se preservan
+    # (NaN) para no esconder leads que aún no tienen motivo cargado.
+    if _applied(sel_categorias, categorias_all) and not df_cat_all.empty:
+        nids_cat_sel = set(
+            df_cat_all[df_cat_all["categoria_clean"].isin(sel_categorias)]["nid"]
+            .dropna().astype(int).tolist()
+        )
+        nids_con_categoria = set(df_cat_all["nid"].dropna().astype(int).tolist())
+        df_hs_f = df_hs_f[
+            df_hs_f["nid"].isin(nids_cat_sel)
+            | ~df_hs_f["nid"].isin(nids_con_categoria)
+        ]
 
 allowed_uuids: set[str] = set(df_hs_f["deal_uuid"].dropna().astype(str)) if not df_hs_f.empty else set()
 
@@ -698,6 +712,16 @@ if _applied(sel_oport, oport_all):
     df_in = df_in[df_in["oportunidad_del_negocio_label"].isin(sel_oport)]
 if _applied(sel_estados, estados_all):
     df_in = df_in[df_in["estado_label"].isin(sel_estados)]
+if _applied(sel_categorias, categorias_all) and not df_cat_all.empty:
+    _nids_cat_sel = set(
+        df_cat_all[df_cat_all["categoria_clean"].isin(sel_categorias)]["nid"]
+        .dropna().astype(int).tolist()
+    )
+    _nids_con_cat = set(df_cat_all["nid"].dropna().astype(int).tolist())
+    _df_in_nid = pd.to_numeric(df_in["nid"], errors="coerce")
+    df_in = df_in[
+        _df_in_nid.isin(_nids_cat_sel) | ~_df_in_nid.isin(_nids_con_cat)
+    ]
 
 # contactado = el teléfono aparece en la pestaña Entrevista. La pestaña
 # Entrevista sigue siendo la mejor fuente, pero si el Sheet ya trae una
