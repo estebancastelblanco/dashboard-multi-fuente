@@ -59,13 +59,23 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_abc_data() -> pd.DataFrame:
+def load_oferta_formal_data_v2() -> pd.DataFrame:
+    """v2: incluye LEFT JOIN base_hubspot + country='México' + equipo_sellers.
+
+    Cambiar el nombre fuerza invalidación del cache key cuando hubo cambios
+    estructurales en la query. v1 antiguo (load_abc_data) puede quedar en
+    disco pero no se carga porque ya no hay calls a él.
+    """
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
+
+
+# Alias para retro-compat con resto del código
+load_abc_data = load_oferta_formal_data_v2
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
