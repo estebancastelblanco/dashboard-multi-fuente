@@ -111,6 +111,24 @@ def load_landing_logs() -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Carga (antes del sidebar para alimentar opciones de equipo_sellers)
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    df = load_abc_data()
+except Exception as exc:
+    st.error(f"Error cargando BigQuery: {type(exc).__name__}: {exc}")
+    st.stop()
+
+if df.empty:
+    st.warning("No hay datos para el experimento.")
+    st.stop()
+
+equipos_all = sorted([
+    e for e in df["equipo_sellers"].dropna().astype(str).str.strip().unique() if e and e.lower() != "nan"
+])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — filtros
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -145,24 +163,34 @@ with st.sidebar:
         label_visibility="collapsed",
         help="Por defecto B vs C (las que el experimento compara). A queda residual.",
     )
+
+    st.markdown("### NID")
+    sel_nid = st.text_input(
+        "nid", value="", placeholder="ej. 59030823233",
+        label_visibility="collapsed",
+        help="Filtra a un nid específico. Vacío = sin filtro.",
+    ).strip()
+
+    st.markdown("### Equipo sellers")
+    sel_equipos = st.multiselect(
+        "equipos", equipos_all, default=equipos_all,
+        label_visibility="collapsed",
+        help="Filtra por equipo_sellers de detalle_ofertas_mx.",
+    )
     st.markdown("---")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Carga
-# ─────────────────────────────────────────────────────────────────────────────
-try:
-    df = load_abc_data()
-except Exception as exc:
-    st.error(f"Error cargando BigQuery: {type(exc).__name__}: {exc}")
-    st.stop()
-
-if df.empty:
-    st.warning("No hay datos para el experimento.")
-    st.stop()
-
 ts_from = pd.Timestamp(date_from)
 ts_to = pd.Timestamp(date_to)
+
+
+# Aplicar filtros transversales (nid + equipo) al universo entero ANTES de
+# derivar los subsets por variante/fecha. Así las secciones aguas abajo
+# heredan los filtros sin repetir lógica.
+if sel_nid:
+    df = df[df["nid"].astype(str) == sel_nid].copy()
+if sel_equipos and len(sel_equipos) < len(equipos_all):
+    df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
@@ -372,16 +400,21 @@ else:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sección 3 · Distribución por variante + funnel de usabilidad de la landing
+# Estas secciones también respetan el rango de fechas (vía fecha_aprobado)
+# y los filtros de nid / equipo_sellers ya aplicados arriba.
 # ─────────────────────────────────────────────────────────────────────────────
 df_events = load_landing_events()
 df_logs = load_landing_logs()
+
+# df_apro ya viene filtrado por variante + fecha_aprobado + nid + equipo
+df_section3 = df_apro
 
 st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Distribución por variante</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
 v_counts = (
-    df_var.drop_duplicates("nid")["abc_test_landing_co"]
+    df_section3.drop_duplicates("nid")["abc_test_landing_co"]
     .value_counts().reindex(sel_variants).fillna(0).astype(int).reset_index()
 )
 v_counts.columns = ["Variante", "N"]
@@ -406,10 +439,9 @@ with col_pie:
 
 # Interacciones por UUID — cruce variante × eventos BQ
 with col_pie_int:
-    deal_uuids_var = set(df_var["deal_uuid"].dropna().astype(str).str.lower())
     eventos_por_var = []
     for v in sel_variants:
-        sub_deals = df_var[df_var["abc_test_landing_co"] == v]
+        sub_deals = df_section3[df_section3["abc_test_landing_co"] == v]
         uuids_v = set(sub_deals["deal_uuid"].dropna().astype(str).str.lower())
         eventos_v = df_events[df_events["uuid"].isin(uuids_v)]["events"].sum() if not df_events.empty else 0
         eventos_por_var.append({"Variante": v, "Eventos": int(eventos_v)})
@@ -438,14 +470,16 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-# Enviados = filas del Sheet LOGS (envíos registrados)
-# Abiertos = UUIDs con al menos 1 evento de página en BQ
-# Interacciones = total de eventos de página en BQ (con duplicados, cuántas
-# veces el cliente abrió o navegó dentro de la landing)
-n_enviados = int(df_logs["uuid"].nunique()) if not df_logs.empty else 0
+# Enviados = filas del Sheet LOGS (envíos registrados) ∩ universo filtrado
+# Abiertos = UUIDs con al menos 1 evento de página en BQ ∩ universo
+# Interacciones = total de eventos de página en BQ
+universe_uuids = set(df_section3["deal_uuid"].dropna().astype(str).str.lower())
+if not df_logs.empty:
+    logs_in_universe = df_logs[df_logs["uuid"].isin(universe_uuids)] if universe_uuids else df_logs
+    n_enviados = int(logs_in_universe["uuid"].nunique())
+else:
+    n_enviados = 0
 
-# Cruzar con deals que tengan variante asignada (universo del experimento)
-universe_uuids = set(df_var["deal_uuid"].dropna().astype(str).str.lower())
 events_in_universe = df_events[df_events["uuid"].isin(universe_uuids)] if not df_events.empty else df_events
 n_abrieron = int(events_in_universe["uuid"].nunique()) if not events_in_universe.empty else 0
 n_interacciones = int(events_in_universe["events"].sum()) if not events_in_universe.empty else 0
@@ -540,6 +574,7 @@ table["Cierre"] = table["fecha_cierre_efectiva"].notna().map({True: "Sí", False
 show_cols = [
     ("abc_test_landing_co", "abc_test_landing_co"),
     ("nid", "nid"),
+    ("equipo_sellers", "equipo_sellers"),
     ("estado_aprobado", "estado_aprobado"),
     ("fecha_aprobado", "fecha_aprobado"),
     ("Cierre", "Cierre"),

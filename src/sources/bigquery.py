@@ -236,7 +236,8 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         CAST(nid AS INT64) AS nid,
         DATE(fecha_aprobado) AS fecha_aprobado,
         DATE(fecha_cierre)   AS fecha_cierre,
-        estado_aprobado
+        estado_aprobado,
+        equipo_sellers
       FROM `papyrus-data.habi_wh.detalle_ofertas_mx`
       WHERE fecha_aprobado IS NOT NULL
       QUALIFY ROW_NUMBER() OVER (
@@ -278,6 +279,7 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       hs.abc_test_landing_co,
       hs.ab_test_landing,
       hs.deal_uuid,
+      o.equipo_sellers,
       o.estado_aprobado,
       o.fecha_aprobado,
       DATE_TRUNC(o.fecha_aprobado, WEEK(MONDAY)) AS fecha_aprobado_semana,
