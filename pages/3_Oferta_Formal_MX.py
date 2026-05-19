@@ -643,67 +643,43 @@ else:
         n_cta_venta = _pct_uuids_que(["cta_continuar_venta"])
         n_asesor = _pct_uuids_que(["cta_hablar_asesor", "whatsapp_click"])
 
-        pct = lambda n: f" ({n/n_entraron*100:.0f}%)" if n_entraron else ""
-
-        # Cada hito es un botón clickeable: al darle click, guarda en
-        # st.session_state el filtro de evento que luego aplica el Desglose.
-        # Click en el mismo hito lo deselecciona.
-        KPI_EVENTS = [
-            ("Entraron landing", ["page_view_landing"], n_entraron, "page_view_landing"),
-            ("Scroll 50%", ["scroll_50"], n_scroll_50, "del que entró"),
-            ("Scroll 75%", ["scroll_75"], n_scroll_75, "del que entró"),
-            ("Scroll 100%", ["scroll_100"], n_scroll_100, "del que entró"),
-            ("Vio comparables", ["section_viewed_comparables"],
-             _pct_uuids_que(["section_viewed_comparables"]), "section_viewed_comparables"),
-            ("Eligió comparable", ["comparable_selected"], n_compar, "comparable_selected"),
-            ("Click CTA venta", ["cta_continuar_venta"], n_cta_venta, "cta_continuar_venta"),
-            ("Habló con asesor", ["cta_hablar_asesor", "whatsapp_click"],
-             n_asesor, "whatsapp / cta_asesor"),
-        ]
-
-        if "kpi_filter" not in st.session_state:
-            st.session_state["kpi_filter"] = None  # None = sin filtro
-
-        def _kpi_button_label(label: str, count: int, sub: str, suffix: str) -> str:
-            return f"**{label}**\n\n{count}{suffix}\n\n{sub}"
-
-        # Fila 1: hitos de profundidad
-        cols1 = st.columns(4)
-        for col, (label, events, count, sub) in zip(cols1, KPI_EVENTS[:4]):
-            is_active = st.session_state["kpi_filter"] == label
-            suffix = pct(count) if label.startswith("Scroll") else ""
-            btn_label = _kpi_button_label(label, count, sub, suffix)
-            if col.button(
-                btn_label, key=f"kpi_{label}",
-                type="primary" if is_active else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state["kpi_filter"] = None if is_active else label
-                st.rerun()
+        # Fila 1: hitos de profundidad de navegación
+        k1, k2, k3, k4 = st.columns(4)
+        k1.markdown(kpi_card("Entraron landing", n_entraron, "page_view_landing"),
+                    unsafe_allow_html=True)
+        pct = lambda n: f"{n/n_entraron*100:.0f}%" if n_entraron else "0%"
+        k2.markdown(kpi_card("Scroll 50%", f"{n_scroll_50} ({pct(n_scroll_50)})",
+                             "del que entró"), unsafe_allow_html=True)
+        k3.markdown(kpi_card("Scroll 75%", f"{n_scroll_75} ({pct(n_scroll_75)})",
+                             "del que entró"), unsafe_allow_html=True)
+        k4.markdown(kpi_card("Scroll 100%", f"{n_scroll_100} ({pct(n_scroll_100)})",
+                             "del que entró"), unsafe_allow_html=True)
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        # Fila 2: hitos de intención
-        cols2 = st.columns(4)
-        for col, (label, events, count, sub) in zip(cols2, KPI_EVENTS[4:]):
-            is_active = st.session_state["kpi_filter"] == label
-            btn_label = _kpi_button_label(label, count, sub, "")
-            if col.button(
-                btn_label, key=f"kpi_{label}",
-                type="primary" if is_active else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state["kpi_filter"] = None if is_active else label
-                st.rerun()
+        # Fila 2: hitos de intención de compra/contacto
+        k5, k6, k7, k8 = st.columns(4)
+        k5.markdown(kpi_card("Vio comparables", _pct_uuids_que(["section_viewed_comparables"]),
+                             "section_viewed_comparables"), unsafe_allow_html=True)
+        k6.markdown(kpi_card("Eligió comparable", n_compar, "comparable_selected"),
+                    unsafe_allow_html=True)
+        k7.markdown(kpi_card("Click CTA venta", n_cta_venta, "cta_continuar_venta"),
+                    unsafe_allow_html=True)
+        k8.markdown(kpi_card("Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
+                    unsafe_allow_html=True)
 
-        # Botón limpiar + indicador de filtro activo
-        if st.session_state["kpi_filter"]:
-            colf, _ = st.columns([1, 5])
-            colf.button("Limpiar filtro de evento", key="kpi_clear",
-                        on_click=lambda: st.session_state.update(kpi_filter=None))
-            st.caption(
-                f"Filtro activo en Desglose: nids cuyos UUIDs dispararon "
-                f"**{st.session_state['kpi_filter']}**."
-            )
+        # Selector horizontal para filtrar el Desglose por evento (drill-down).
+        # Mantiene las KPI cards limpias arriba y deja el control aparte.
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        KPI_OPTIONS = ["Sin filtro", "Entraron landing", "Scroll 50%", "Scroll 75%",
+                       "Scroll 100%", "Vio comparables", "Eligió comparable",
+                       "Click CTA venta", "Habló con asesor"]
+        sel_kpi = st.radio(
+            "Drill-down al Desglose por evento",
+            KPI_OPTIONS, horizontal=True, index=0,
+            key="kpi_filter_radio",
+            help="Filtra el Desglose por nids cuyos UUIDs dispararon el evento elegido.",
+        )
+        st.session_state["kpi_filter"] = None if sel_kpi == "Sin filtro" else sel_kpi
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
