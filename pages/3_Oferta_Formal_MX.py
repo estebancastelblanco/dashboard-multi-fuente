@@ -289,7 +289,8 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
         height=420, margin=dict(l=10, r=10, t=70, b=10),
         barmode="group", bargap=0.18, bargroupgap=0.05,
-        xaxis=dict(title="Variante", gridcolor="#ede8f5"),
+        xaxis=dict(title="Variante", gridcolor="#ede8f5",
+                   type="category", categoryorder="array", categoryarray=sel_variants),
         yaxis=dict(title="Aprobados | Aprobados rta | Cierre", gridcolor="#ede8f5"),
         yaxis2=dict(title="CVR | CVR Rta", overlaying="y", side="right",
                     ticksuffix="%", gridcolor="rgba(0,0,0,0)"),
@@ -302,6 +303,9 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
 # ─────────────────────────────────────────────────────────────────────────────
 # Filtros aplicados (fechas)
 # ─────────────────────────────────────────────────────────────────────────────
+# Mantener orden canónico A, B, C, (sin variante) — multiselect respeta orden
+# de selección pero queremos eje X consistente.
+sel_variants = [v for v in VARIANTS if v in sel_variants]
 df_var = df[df["abc_test_landing_co"].isin(sel_variants)].copy()
 # Funnel semanal: universo completo MX (sin filtrar por variante) para que
 # los conteos cuadren con Looker, que no aplica ese filtro.
@@ -479,7 +483,8 @@ with col_pie_int:
                        font=dict(size=13, color=DEEP)),
             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
             height=320, margin=dict(l=10, r=10, t=44, b=10),
-            xaxis=dict(title="Variante", gridcolor="#ede8f5"),
+            xaxis=dict(title="Variante", gridcolor="#ede8f5",
+                       type="category", categoryorder="array", categoryarray=sel_variants),
             yaxis=dict(title="N eventos", gridcolor="#ede8f5"),
         )
         st.plotly_chart(fig_ev, use_container_width=True, key="bar_eventos_var")
