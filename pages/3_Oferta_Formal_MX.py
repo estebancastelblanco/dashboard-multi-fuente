@@ -256,6 +256,9 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
 # Filtros aplicados (fechas)
 # ─────────────────────────────────────────────────────────────────────────────
 df_var = df[df["abc_test_landing_co"].isin(sel_variants)].copy()
+# Funnel semanal: universo completo MX (sin filtrar por variante) para que
+# los conteos cuadren con Looker, que no aplica ese filtro.
+df_apro_all = df[df["fecha_aprobado"].between(ts_from, ts_to, inclusive="both")]
 df_apro = df_var[
     df_var["fecha_aprobado"].between(ts_from, ts_to, inclusive="both")
 ]
@@ -290,12 +293,12 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Funnel semanal — fecha de aprobación</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-if df_apro.empty:
+if df_apro_all.empty:
     st.info("Sin aprobados en el rango seleccionado.")
 else:
     rows = []
     # W-TUE = semana que termina martes → empieza miércoles (alineado con Looker WEEK(WEDNESDAY))
-    for week, sub in df_apro.groupby(df_apro["fecha_aprobado"].dt.to_period("W-TUE")):
+    for week, sub in df_apro_all.groupby(df_apro_all["fecha_aprobado"].dt.to_period("W-TUE")):
         m = _metric_block(sub)
         m["semana_date"] = week.start_time.date()
         rows.append(m)

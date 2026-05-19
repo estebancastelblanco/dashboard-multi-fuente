@@ -294,7 +294,7 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         ELSE NULL
       END AS categoria_ancla
     FROM base_ofertas o
-    INNER JOIN base_hubspot hs ON hs.nid = o.nid
+    LEFT JOIN base_hubspot hs ON hs.nid = o.nid
     LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
     LEFT JOIN base_cierres_mx c ON c.nid = o.nid
     """
