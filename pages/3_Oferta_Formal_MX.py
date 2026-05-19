@@ -123,8 +123,11 @@ if df.empty:
     st.warning("No hay datos para el experimento.")
     st.stop()
 
+if "equipo_sellers" not in df.columns:
+    df["equipo_sellers"] = pd.Series(dtype=str)
 equipos_all = sorted([
-    e for e in df["equipo_sellers"].dropna().astype(str).str.strip().unique() if e and e.lower() != "nan"
+    e for e in df["equipo_sellers"].dropna().astype(str).str.strip().unique()
+    if e and e.lower() != "nan"
 ])
 
 
