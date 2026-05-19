@@ -212,12 +212,18 @@ df_ofer = df_var[
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>CVR por variante — fecha de aprobación</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-st.plotly_chart(_bars_lines_by_variant(df_apro, "fecha_aprobado"), use_container_width=True)
+st.plotly_chart(
+    _bars_lines_by_variant(df_apro, "fecha_aprobado"),
+    use_container_width=True, key="chart_cvr_aprobado",
+)
 
 st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>CVR por variante — fecha de ofertado</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-st.plotly_chart(_bars_lines_by_variant(df_ofer, "fecha_ofertado"), use_container_width=True)
+st.plotly_chart(
+    _bars_lines_by_variant(df_ofer, "fecha_ofertado"),
+    use_container_width=True, key="chart_cvr_ofertado",
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,7 +284,7 @@ else:
         legend=dict(orientation="h", yanchor="bottom", y=1.06, x=0,
                     font=dict(size=11)),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="chart_funnel_semanal")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
