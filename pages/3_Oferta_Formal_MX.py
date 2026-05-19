@@ -57,7 +57,7 @@ COLOR_CVR = "#84cc16"           # verde-amarillo
 COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · ABC Test Landing CO…", persist="disk")
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
 def load_abc_data() -> pd.DataFrame:
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
@@ -67,16 +67,27 @@ def load_abc_data() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
+def load_landing_events() -> pd.DataFrame:
+    """Eventos en https://ofertas.tuhabi.mx/<uuid>: una fila por UUID."""
+    try:
+        return bq_src.fetch_oferta_formal_landing_events()
+    except Exception as exc:
+        st.warning(f"BigQuery eventos landing: {type(exc).__name__}: {exc}")
+        return pd.DataFrame(columns=["uuid", "events", "first_seen", "last_seen"])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — filtros
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     if st.button("Actualizar datos", use_container_width=True,
                  help="Refresca el cache de BigQuery."):
-        try:
-            load_abc_data.clear()
-        except Exception:
-            pass
+        for loader in (load_abc_data, load_landing_events):
+            try:
+                loader.clear()
+            except Exception:
+                pass
         st.rerun()
     st.markdown("---")
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
@@ -166,20 +177,33 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
     ))
     fig.add_trace(go.Scatter(
         name="CVR", x=g["variante"], y=g["cvr"] * 100,
-        mode="lines+markers+text",
-        line=dict(color=COLOR_CVR, width=3), marker=dict(size=9),
-        text=[f"{v*100:.2f}%" for v in g["cvr"]],
-        textposition="top center",
+        mode="lines+markers",
+        line=dict(color=COLOR_CVR, width=3), marker=dict(size=11),
         yaxis="y2",
+        hovertemplate="<b>%{x}</b><br>CVR: %{y:.2f}%<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         name="CVR Rta", x=g["variante"], y=g["cvr_rta"] * 100,
-        mode="lines+markers+text",
-        line=dict(color=COLOR_CVR_RTA, width=3), marker=dict(size=9),
-        text=[f"{v*100:.2f}%" for v in g["cvr_rta"]],
-        textposition="bottom center",
+        mode="lines+markers",
+        line=dict(color=COLOR_CVR_RTA, width=3), marker=dict(size=11),
         yaxis="y2",
+        hovertemplate="<b>%{x}</b><br>CVR Rta: %{y:.2f}%<extra></extra>",
     ))
+    # Anotaciones de % CVR/CVR Rta separadas verticalmente con offsets fijos
+    # en pixels para que no choquen entre sí ni con las labels de las barras.
+    for _, row in g.iterrows():
+        fig.add_annotation(
+            x=row["variante"], y=row["cvr"] * 100, yref="y2",
+            text=f"<b>{row['cvr']*100:.2f}%</b>", showarrow=False,
+            yshift=14, font=dict(size=12, color=COLOR_CVR),
+            bgcolor="rgba(255,255,255,0.85)", borderpad=2,
+        )
+        fig.add_annotation(
+            x=row["variante"], y=row["cvr_rta"] * 100, yref="y2",
+            text=f"<b>{row['cvr_rta']*100:.2f}%</b>", showarrow=False,
+            yshift=-16, font=dict(size=12, color=COLOR_CVR_RTA),
+            bgcolor="rgba(255,255,255,0.85)", borderpad=2,
+        )
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
@@ -260,18 +284,31 @@ else:
     ))
     fig.add_trace(go.Scatter(
         name="CVR", x=g["semana"], y=g["cvr"] * 100,
-        mode="lines+markers+text", line=dict(color=COLOR_CVR, width=3),
-        marker=dict(size=9),
-        text=[f"{v*100:.2f}%" for v in g["cvr"]],
-        textposition="top center", yaxis="y2",
+        mode="lines+markers", line=dict(color=COLOR_CVR, width=3),
+        marker=dict(size=11),
+        hovertemplate="%{x|%d %b %Y}<br>CVR: %{y:.2f}%<extra></extra>",
+        yaxis="y2",
     ))
     fig.add_trace(go.Scatter(
         name="CVR Rta", x=g["semana"], y=g["cvr_rta"] * 100,
-        mode="lines+markers+text", line=dict(color=COLOR_CVR_RTA, width=3),
-        marker=dict(size=9),
-        text=[f"{v*100:.2f}%" for v in g["cvr_rta"]],
-        textposition="bottom center", yaxis="y2",
+        mode="lines+markers", line=dict(color=COLOR_CVR_RTA, width=3),
+        marker=dict(size=11),
+        hovertemplate="%{x|%d %b %Y}<br>CVR Rta: %{y:.2f}%<extra></extra>",
+        yaxis="y2",
     ))
+    for _, row in g.iterrows():
+        fig.add_annotation(
+            x=row["semana"], y=row["cvr"] * 100, yref="y2",
+            text=f"<b>{row['cvr']*100:.1f}%</b>", showarrow=False,
+            yshift=14, font=dict(size=11, color=COLOR_CVR),
+            bgcolor="rgba(255,255,255,0.85)", borderpad=2,
+        )
+        fig.add_annotation(
+            x=row["semana"], y=row["cvr_rta"] * 100, yref="y2",
+            text=f"<b>{row['cvr_rta']*100:.1f}%</b>", showarrow=False,
+            yshift=-16, font=dict(size=11, color=COLOR_CVR_RTA),
+            bgcolor="rgba(255,255,255,0.85)", borderpad=2,
+        )
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),

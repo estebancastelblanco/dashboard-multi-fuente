@@ -237,7 +237,7 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         DATE(fecha_aprobado) AS fecha_aprobado,
         DATE(fecha_cierre)   AS fecha_cierre,
         estado_aprobado
-      FROM `papyrus-data.habi_wh.detalle_ofertas_col`
+      FROM `papyrus-data.habi_wh.detalle_ofertas_mx`
       WHERE fecha_aprobado IS NOT NULL
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY nid, DATE(fecha_aprobado) ORDER BY fecha_aprobado DESC
@@ -248,12 +248,14 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         CAST(nid AS INT64) AS nid,
         abc_test_landing_co,
         ab_test_landing,
+        LOWER(deal_uuid) AS deal_uuid,
         SAFE_CAST(valor_negociado AS FLOAT64) AS valor_negociado,
         SAFE_CAST(ask_price AS FLOAT64)       AS customer_price,
         SAFE_CAST(precio_ancla AS FLOAT64)    AS precio_ancla_hs,
         SAFE_CAST(oferta_final_prestamo_mx_calculada AS FLOAT64) AS oferta_final_calculada
       FROM `sellers-main-prod.hubspot.deals`
       WHERE abc_test_landing_co IS NOT NULL
+        AND country = 'México'
     ),
     pasaron_ofertados AS (
       SELECT
@@ -263,18 +265,19 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       WHERE propiedad = 'dealstage' AND valor = '1066441580'
       GROUP BY 1
     ),
-    base_cierres_co AS (
+    base_cierres_mx AS (
       SELECT
         CAST(nid AS INT64) AS nid,
-        MIN(DATE(fecha_de_firma_promesa_compra_venta_docusign)) AS v_fecha_promesa
-      FROM `papyrus-master.operations_sellers_co_dwh.sellers_promesa_compraventa_co_dwh`
-      WHERE fecha_de_firma_promesa_compra_venta_docusign IS NOT NULL
+        MIN(DATE(v_fecha_cierre)) AS v_fecha_promesa
+      FROM `papyrus-master.operations_sellers_mx_dwh.int_sellers_cierres_y_precierres_mx_dwh`
+      WHERE v_fecha_cierre IS NOT NULL
       GROUP BY 1
     )
     SELECT
       o.nid,
       hs.abc_test_landing_co,
       hs.ab_test_landing,
+      hs.deal_uuid,
       o.estado_aprobado,
       o.fecha_aprobado,
       DATE_TRUNC(o.fecha_aprobado, WEEK(MONDAY)) AS fecha_aprobado_semana,
@@ -293,11 +296,36 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
     FROM base_ofertas o
     INNER JOIN base_hubspot hs ON hs.nid = o.nid
     LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
-    LEFT JOIN base_cierres_co c ON c.nid = o.nid
+    LEFT JOIN base_cierres_mx c ON c.nid = o.nid
     """
     df = _client().query(sql).to_dataframe()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
+
+
+def fetch_oferta_formal_landing_events() -> pd.DataFrame:
+    """Eventos de página en https://ofertas.tuhabi.mx/<uuid>.
+
+    Devuelve un row por UUID con conteo total de vistas (events) y la primera
+    vez que apareció en BQ. Filtra el dominio MX del experimento Oferta formal.
+    """
+    sql = r"""
+    SELECT
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
+      COUNT(*) AS events,
+      MIN(timestamp) AS first_seen,
+      MAX(timestamp) AS last_seen
+    FROM `sellers-main-prod.javascript9.pages`
+    WHERE context_page_url LIKE 'https://ofertas.tuhabi.mx/%'
+      AND REGEXP_CONTAINS(context_page_url, r'tuhabi\.mx/[0-9a-fA-F\-]{36}')
+    GROUP BY 1
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["first_seen"] = pd.to_datetime(df["first_seen"], errors="coerce")
+        df["last_seen"] = pd.to_datetime(df["last_seen"], errors="coerce")
+        df["uuid"] = df["uuid"].astype(str).str.lower()
     return df
