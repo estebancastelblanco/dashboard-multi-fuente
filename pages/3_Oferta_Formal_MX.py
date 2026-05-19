@@ -114,7 +114,10 @@ _UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 @st.cache_data(ttl=120, show_spinner="Sheets · logs de envíos…")
 def load_landing_logs() -> pd.DataFrame:
-    """Filas del Sheet LOGS donde la URL apunta a ofertas.tuhabi.mx."""
+    """Filas del Sheet LOGS donde la URL es de dominio MX (.mx).
+
+    Captura cualquier subdominio .mx (ofertas.tuhabi.mx, etc.).
+    """
     try:
         from src.sources import gsheets as gs_src
         df = gs_src.fetch_tab("LOGS", sheet_id=LANDING_SHEET_ID)
@@ -124,7 +127,7 @@ def load_landing_logs() -> pd.DataFrame:
     if df.empty:
         return df
     mask = df.get("base_url", pd.Series(dtype=str)).astype(str).str.contains(
-        "ofertas.tuhabi.mx", case=False, na=False
+        r"\.mx", case=False, na=False, regex=True,
     )
     df = df[mask].copy()
 
@@ -548,25 +551,36 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-# Funnel: solo 2 etapas
-# - Enviados = nids del template WhatsApp ∩ universo donde abc IN ('A','B','C')
-#   (excluye "(sin variante)" — solo cuenta deals con variante asignada)
-# - Interacciones = registros únicos en el Sheet LOGS (UUIDs únicos en el log)
+# Funnel: solo 2 etapas. NO cruza con el universo filtrado del dashboard —
+# usa los totales del template y del Sheet. Solo respeta el rango de fechas
+# vía created_at (envíos) y timestamp (sheet logs).
+# - Enviados = nids del template WhatsApp con message_status IN ('read','delivered')
+# - Interacciones = UUIDs únicos en el Sheet LOGS con dominio .mx
 df_envios = load_envios_wa()
-# universo restringido a variantes reales A/B/C dentro del rango/nid/equipo
+
+# Para el cruce de la sección "Comportamiento en la landing" (más abajo)
+# sí se mantiene el universo A/B/C porque ahí queremos comparar variantes.
 df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C"])]
-universe_nids_abc = set(df_section3_abc["nid"].dropna().astype(int).tolist())
 universe_uuids_abc = set(df_section3_abc["deal_uuid"].dropna().astype(str).str.lower())
 
-if not df_envios.empty and universe_nids_abc:
-    envios_in_universe = df_envios[df_envios["nid"].isin(universe_nids_abc)]
-    n_enviados = int(envios_in_universe["nid"].dropna().nunique())
+# Enviados: respeta solo el rango de fechas sobre created_at
+if not df_envios.empty:
+    enviados_fechas = pd.to_datetime(df_envios["created_at"], errors="coerce")
+    in_range = (enviados_fechas >= ts_from) & (enviados_fechas <= ts_to + pd.Timedelta(days=1))
+    envios_filtered = df_envios[in_range | enviados_fechas.isna()]
+    n_enviados = int(envios_filtered["nid"].dropna().nunique())
 else:
     n_enviados = 0
 
+# Interacciones: UUIDs únicos del Sheet LOGS con dominio .mx en el rango
 if not df_logs.empty:
-    logs_in_universe = df_logs[df_logs["uuid"].isin(universe_uuids_abc)] if universe_uuids_abc else df_logs
-    n_interacciones = int(logs_in_universe["uuid"].nunique())
+    if "timestamp" in df_logs.columns:
+        logs_fechas = pd.to_datetime(df_logs["timestamp"], errors="coerce", utc=True).dt.tz_localize(None)
+        in_range_logs = (logs_fechas >= ts_from) & (logs_fechas <= ts_to + pd.Timedelta(days=1))
+        logs_filtered = df_logs[in_range_logs | logs_fechas.isna()]
+    else:
+        logs_filtered = df_logs
+    n_interacciones = int(logs_filtered["uuid"].dropna().nunique())
 else:
     n_interacciones = 0
 
