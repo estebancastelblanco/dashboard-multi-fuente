@@ -308,6 +308,24 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
     return df
 
 
+def fetch_oferta_formal_envios_wa() -> pd.DataFrame:
+    """Envíos de WhatsApp de Oferta formal MX.
+
+    Filtra por el template del experimento. Devuelve una fila por mensaje
+    enviado con nid y message_status (read/delivered/undelivered/rejected).
+    """
+    sql = """
+    SELECT nid, message_status, created_at
+    FROM `sellers-main-prod.mx_rds_staging.habi_notifications_whatsapp_messages`
+    WHERE template_id = "envio_oferta_liquidez_mx_estebancastelblanco_60326"
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["nid"] = pd.to_numeric(df["nid"], errors="coerce").astype("Int64")
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    return df
+
+
 def fetch_oferta_formal_landing_events() -> pd.DataFrame:
     """Eventos de página en https://ofertas.tuhabi.mx/<uuid>.
 

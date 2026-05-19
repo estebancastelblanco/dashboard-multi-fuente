@@ -78,6 +78,16 @@ def load_landing_events() -> pd.DataFrame:
         return pd.DataFrame(columns=["uuid", "events", "first_seen", "last_seen"])
 
 
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · envíos WhatsApp…", persist="disk")
+def load_envios_wa() -> pd.DataFrame:
+    """Envíos de WhatsApp del template de Oferta formal MX."""
+    try:
+        return bq_src.fetch_oferta_formal_envios_wa()
+    except Exception as exc:
+        st.warning(f"BigQuery envíos WA: {type(exc).__name__}: {exc}")
+        return pd.DataFrame(columns=["nid", "message_status", "created_at"])
+
+
 LANDING_SHEET_ID = "1_EMQesd_n67wSqReYaTdJtSd3uvZsb7GXPRD6LyrJN4"
 import re
 _UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
@@ -131,6 +141,11 @@ equipos_all = sorted([
     if e and e.lower() != "nan"
 ])
 
+# Normalizar variante: NULL → "(sin variante)" para que isin() funcione
+# directo en todas las secciones.
+df["abc_test_landing_co"] = df["abc_test_landing_co"].fillna(NULL_VARIANT_LABEL)
+df.loc[df["abc_test_landing_co"].astype(str).str.strip() == "", "abc_test_landing_co"] = NULL_VARIANT_LABEL
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — filtros
@@ -138,7 +153,7 @@ equipos_all = sorted([
 with st.sidebar:
     if st.button("Actualizar datos", use_container_width=True,
                  help="Refresca el cache de BigQuery."):
-        for loader in (load_abc_data, load_landing_events, load_landing_logs):
+        for loader in (load_abc_data, load_landing_events, load_landing_logs, load_envios_wa):
             try:
                 loader.clear()
             except Exception:
@@ -287,13 +302,7 @@ def _bars_lines_by_variant(df_filt: pd.DataFrame, date_col: str, title: str | No
 # ─────────────────────────────────────────────────────────────────────────────
 # Filtros aplicados (fechas)
 # ─────────────────────────────────────────────────────────────────────────────
-# Permitir filtrar por A/B/C y "(sin variante)" (= abc_test_landing_co NULL).
-_real_variants = [v for v in sel_variants if v != NULL_VARIANT_LABEL]
-_include_null = NULL_VARIANT_LABEL in sel_variants
-_mask_var = df["abc_test_landing_co"].isin(_real_variants) if _real_variants else pd.Series(False, index=df.index)
-if _include_null:
-    _mask_var = _mask_var | df["abc_test_landing_co"].isna()
-df_var = df[_mask_var].copy()
+df_var = df[df["abc_test_landing_co"].isin(sel_variants)].copy()
 # Funnel semanal: universo completo MX (sin filtrar por variante) para que
 # los conteos cuadren con Looker, que no aplica ese filtro.
 df_apro_all = df[df["fecha_aprobado"].between(ts_from, ts_to, inclusive="both")]
@@ -480,13 +489,18 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-# Enviados = filas del Sheet LOGS (envíos registrados) ∩ universo filtrado
+# Enviados = nids únicos del template de WhatsApp ∩ universo filtrado
 # Abiertos = UUIDs con al menos 1 evento de página en BQ ∩ universo
 # Interacciones = total de eventos de página en BQ
+df_envios = load_envios_wa()
+universe_nids = set(df_section3["nid"].dropna().astype(int).tolist())
 universe_uuids = set(df_section3["deal_uuid"].dropna().astype(str).str.lower())
-if not df_logs.empty:
-    logs_in_universe = df_logs[df_logs["uuid"].isin(universe_uuids)] if universe_uuids else df_logs
-    n_enviados = int(logs_in_universe["uuid"].nunique())
+
+if not df_envios.empty:
+    envios_in_universe = (
+        df_envios[df_envios["nid"].isin(universe_nids)] if universe_nids else df_envios
+    )
+    n_enviados = int(envios_in_universe["nid"].dropna().nunique())
 else:
     n_enviados = 0
 
@@ -515,11 +529,6 @@ fig_funnel.update_layout(
     yaxis=dict(autorange="reversed"),
 )
 st.plotly_chart(fig_funnel, use_container_width=True, key="funnel_landing")
-st.caption(
-    f"Enviados: Sheet LOGS filtrado por dominio `ofertas.tuhabi.mx` ({n_enviados:,} UUIDs únicos). "
-    f"Abrieron: UUIDs con al menos 1 evento en BQ ({n_abrieron:,}). "
-    f"Interacciones: total de page views en BQ ({n_interacciones:,})."
-)
 
 
 # KPIs y distribución de aperturas por UUID
@@ -608,7 +617,8 @@ table_view = table[[c for c, _ in show_cols]].rename(columns=dict(show_cols))
 
 # Color escala rojo (pocas aperturas) → verde (muchas) en la columna
 # "Veces abrió landing". Sin matplotlib (no instalado en cloud).
-_max_aperturas = max(int(table_view["Veces abrió landing"].max()), 1)
+_max_val = table_view["Veces abrió landing"].max() if not table_view.empty else 0
+_max_aperturas = max(int(_max_val) if pd.notna(_max_val) else 0, 1)
 
 def _color_aperturas(v):
     try:
