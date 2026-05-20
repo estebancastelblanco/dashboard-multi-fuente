@@ -1440,6 +1440,163 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Aplicables (CTL — gravámenes extraídos del Certificado de Tradición y Libertad)
+# CSV pre-generado por scripts/process_ctl_gravamenes.py
+# Detecta hipoteca / leasing / patrimonio de familia en el CTL del inmueble.
+# Aplica = ninguno de los 3 → el inmueble puede usarse como garantía.
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Aplicables · gravámenes del CTL</h2>", unsafe_allow_html=True)
+
+_CTL_CSV = REPO_ROOT / "data" / "ctl_gravamenes_fakedoor.csv"
+if not _CTL_CSV.exists():
+    st.info("Aún no hay CSV de gravámenes CTL. Corre scripts/process_ctl_gravamenes.py.")
+else:
+    df_ctl = pd.read_csv(_CTL_CSV)
+    df_ctl["nid"] = pd.to_numeric(df_ctl["nid"], errors="coerce")
+
+    # Cruzar con HubSpot para traer fuente (= equivalente de "producto" del FakeDoor)
+    if not df_hs.empty and "nid" in df_hs.columns and "fuente" in df_hs.columns:
+        df_ctl = df_ctl.merge(
+            df_hs[["nid", "fuente"]].drop_duplicates("nid"),
+            on="nid", how="left",
+        )
+    else:
+        df_ctl["fuente"] = "(sin fuente)"
+    df_ctl["fuente"] = df_ctl["fuente"].fillna("(sin fuente)")
+
+    # Selector de fuente (= "producto" del FakeDoor)
+    fuente_opts = ["Todos"] + sorted(df_ctl["fuente"].dropna().astype(str).unique().tolist())
+    sel_fuente_ctl = st.radio(
+        "Fuente del cliente",
+        fuente_opts, horizontal=True, index=0,
+        key="ctl_fuente",
+        help="Filtra los KPIs y gráficos por fuente del cliente (Top / MM+Inmo / Rechazos).",
+    )
+    df_ctl_view = df_ctl if sel_fuente_ctl == "Todos" else df_ctl[df_ctl["fuente"] == sel_fuente_ctl]
+
+    # KPIs
+    n_total = len(df_ctl_view)
+    err_col = df_ctl_view["error"].fillna("").astype(str) if "error" in df_ctl_view.columns else pd.Series([""] * n_total)
+    n_errores = int((err_col.str.strip() != "").sum())
+    n_validos = n_total - n_errores
+    n_aplican = int(df_ctl_view["aplica"].fillna(False).astype(bool).sum())
+    n_no_aplican = n_validos - n_aplican
+    pct_aplica = (n_aplican / n_validos * 100) if n_validos else 0
+    # Solo patrimonio = patrimonio=True AND hipoteca=False AND leasing=False
+    # → recuperables (el patrimonio se puede levantar legalmente)
+    mask_solo_pat = (
+        (df_ctl_view["tiene_patrimonio_familia"].fillna(False).astype(bool))
+        & (~df_ctl_view["tiene_hipoteca"].fillna(False).astype(bool))
+        & (~df_ctl_view["tiene_leasing"].fillna(False).astype(bool))
+    )
+    n_solo_pat = int(mask_solo_pat.sum())
+
+    # Línea informativa con la cadena de filtros
+    st.caption(
+        f"Universo FakeDoor (AH/BH): 748 nids · 252 tienen CTL en HubSpot · "
+        f"496 sin CTL (no procesables). De los 252 procesados aquí se muestra "
+        f"el subset filtrado por fuente."
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.markdown(kpi_card("CTL procesados", n_total, f"{sel_fuente_ctl}"),
+                unsafe_allow_html=True)
+    c2.markdown(kpi_card("Aplican (sin gravamen)",
+                         f"{n_aplican} ({pct_aplica:.0f}%)",
+                         "libre de hipoteca/leasing/patrimonio"),
+                unsafe_allow_html=True)
+    c3.markdown(kpi_card("Solo patrimonio",
+                         f"{n_solo_pat} ({(n_solo_pat/n_validos*100 if n_validos else 0):.0f}%)",
+                         "recuperables · el patrimonio se levanta"),
+                unsafe_allow_html=True)
+    c4.markdown(kpi_card("No aplican", f"{n_no_aplican}",
+                         "con hipoteca o leasing"),
+                unsafe_allow_html=True)
+    c5.markdown(kpi_card("Errores CTL", n_errores, "PDF inválido / no descargable"),
+                unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+    # Bar horizontal de gravámenes más comunes
+    grav_cols = ["tiene_hipoteca", "tiene_leasing", "tiene_patrimonio_familia"]
+    grav_labels = {
+        "tiene_hipoteca": "Hipoteca",
+        "tiene_leasing": "Leasing",
+        "tiene_patrimonio_familia": "Patrimonio de familia",
+    }
+    grav_counts = []
+    for c in grav_cols:
+        n = int(df_ctl_view[c].fillna(False).astype(bool).sum())
+        grav_counts.append({"Gravamen": grav_labels[c], "Con gravamen": n})
+    g_df = pd.DataFrame(grav_counts).sort_values("Con gravamen", ascending=True)
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        fig_grav = go.Figure(go.Bar(
+            x=g_df["Con gravamen"], y=g_df["Gravamen"], orientation="h",
+            marker_color=[RED, "#F59E0B", MED],
+            text=g_df["Con gravamen"], textposition="outside",
+        ))
+        fig_grav.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            title=dict(text=f"Gravámenes detectados · {sel_fuente_ctl}",
+                       font=dict(size=13, color=DEEP)),
+            height=300, margin=dict(l=10, r=60, t=44, b=10),
+            xaxis=dict(title="N° de CTLs con gravamen", gridcolor="#ede8f5"),
+            yaxis=dict(gridcolor="#ede8f5"),
+        )
+        st.plotly_chart(fig_grav, use_container_width=True, key="ctl_grav_bar")
+
+    with col_right:
+        # Desglose Aplica/No aplica por fuente
+        fuente_summary = (
+            df_ctl[df_ctl["error"].astype(str) == ""].assign(
+                estado=lambda d: d["aplica"].fillna(False).astype(bool).map(
+                    {True: "Aplica", False: "No aplica"}
+                )
+            )
+            .groupby(["fuente", "estado"])
+            .size().reset_index(name="N")
+        )
+        fig_src = go.Figure()
+        for estado, color in [("Aplica", GREEN_DARK), ("No aplica", "#9ca3af")]:
+            sub = fuente_summary[fuente_summary["estado"] == estado]
+            fig_src.add_trace(go.Bar(
+                name=estado, x=sub["fuente"], y=sub["N"],
+                marker_color=color, text=sub["N"], textposition="inside",
+            ))
+        fig_src.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            title=dict(text="Aplican vs No aplican por fuente",
+                       font=dict(size=13, color=DEEP)),
+            barmode="stack", height=300, margin=dict(l=10, r=10, t=44, b=10),
+            xaxis=dict(title="Fuente", gridcolor="#ede8f5"),
+            yaxis=dict(title="CTLs", gridcolor="#ede8f5"),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0),
+        )
+        st.plotly_chart(fig_src, use_container_width=True, key="ctl_fuente_bar")
+
+    with st.expander("Detalle por nid · CTL + gravámenes", expanded=False):
+        cols_view = ["nid", "fuente", "tiene_hipoteca", "tiene_leasing",
+                     "tiene_patrimonio_familia", "aplica", "anotaciones_raw", "error"]
+        cols_view = [c for c in cols_view if c in df_ctl_view.columns]
+        st.dataframe(
+            df_ctl_view[cols_view].rename(columns={
+                "nid": "NID", "fuente": "Fuente",
+                "tiene_hipoteca": "Hipoteca",
+                "tiene_leasing": "Leasing",
+                "tiene_patrimonio_familia": "Patrimonio fam.",
+                "aplica": "Aplica",
+                "anotaciones_raw": "Anotaciones (raw)",
+                "error": "Error",
+            }),
+            hide_index=True, use_container_width=True,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Distribución de leads (side-by-side, todas las categorias)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Distribución de leads</h2>", unsafe_allow_html=True)
@@ -2335,163 +2492,6 @@ else:
         })
     )
     st.dataframe(detalle, hide_index=True, use_container_width=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Aplicables (CTL — gravámenes extraídos del Certificado de Tradición y Libertad)
-# CSV pre-generado por scripts/process_ctl_gravamenes.py
-# Detecta hipoteca / leasing / patrimonio de familia en el CTL del inmueble.
-# Aplica = ninguno de los 3 → el inmueble puede usarse como garantía.
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Aplicables · gravámenes del CTL</h2>", unsafe_allow_html=True)
-
-_CTL_CSV = REPO_ROOT / "data" / "ctl_gravamenes_fakedoor.csv"
-if not _CTL_CSV.exists():
-    st.info("Aún no hay CSV de gravámenes CTL. Corre scripts/process_ctl_gravamenes.py.")
-else:
-    df_ctl = pd.read_csv(_CTL_CSV)
-    df_ctl["nid"] = pd.to_numeric(df_ctl["nid"], errors="coerce")
-
-    # Cruzar con HubSpot para traer fuente (= equivalente de "producto" del FakeDoor)
-    if not df_hs.empty and "nid" in df_hs.columns and "fuente" in df_hs.columns:
-        df_ctl = df_ctl.merge(
-            df_hs[["nid", "fuente"]].drop_duplicates("nid"),
-            on="nid", how="left",
-        )
-    else:
-        df_ctl["fuente"] = "(sin fuente)"
-    df_ctl["fuente"] = df_ctl["fuente"].fillna("(sin fuente)")
-
-    # Selector de fuente (= "producto" del FakeDoor)
-    fuente_opts = ["Todos"] + sorted(df_ctl["fuente"].dropna().astype(str).unique().tolist())
-    sel_fuente_ctl = st.radio(
-        "Fuente del cliente",
-        fuente_opts, horizontal=True, index=0,
-        key="ctl_fuente",
-        help="Filtra los KPIs y gráficos por fuente del cliente (Top / MM+Inmo / Rechazos).",
-    )
-    df_ctl_view = df_ctl if sel_fuente_ctl == "Todos" else df_ctl[df_ctl["fuente"] == sel_fuente_ctl]
-
-    # KPIs
-    n_total = len(df_ctl_view)
-    err_col = df_ctl_view["error"].fillna("").astype(str) if "error" in df_ctl_view.columns else pd.Series([""] * n_total)
-    n_errores = int((err_col.str.strip() != "").sum())
-    n_validos = n_total - n_errores
-    n_aplican = int(df_ctl_view["aplica"].fillna(False).astype(bool).sum())
-    n_no_aplican = n_validos - n_aplican
-    pct_aplica = (n_aplican / n_validos * 100) if n_validos else 0
-    # Solo patrimonio = patrimonio=True AND hipoteca=False AND leasing=False
-    # → recuperables (el patrimonio se puede levantar legalmente)
-    mask_solo_pat = (
-        (df_ctl_view["tiene_patrimonio_familia"].fillna(False).astype(bool))
-        & (~df_ctl_view["tiene_hipoteca"].fillna(False).astype(bool))
-        & (~df_ctl_view["tiene_leasing"].fillna(False).astype(bool))
-    )
-    n_solo_pat = int(mask_solo_pat.sum())
-
-    # Línea informativa con la cadena de filtros
-    st.caption(
-        f"Universo FakeDoor (AH/BH): 748 nids · 252 tienen CTL en HubSpot · "
-        f"496 sin CTL (no procesables). De los 252 procesados aquí se muestra "
-        f"el subset filtrado por fuente."
-    )
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.markdown(kpi_card("CTL procesados", n_total, f"{sel_fuente_ctl}"),
-                unsafe_allow_html=True)
-    c2.markdown(kpi_card("Aplican (sin gravamen)",
-                         f"{n_aplican} ({pct_aplica:.0f}%)",
-                         "libre de hipoteca/leasing/patrimonio"),
-                unsafe_allow_html=True)
-    c3.markdown(kpi_card("Solo patrimonio",
-                         f"{n_solo_pat} ({(n_solo_pat/n_validos*100 if n_validos else 0):.0f}%)",
-                         "recuperables · el patrimonio se levanta"),
-                unsafe_allow_html=True)
-    c4.markdown(kpi_card("No aplican", f"{n_no_aplican}",
-                         "con hipoteca o leasing"),
-                unsafe_allow_html=True)
-    c5.markdown(kpi_card("Errores CTL", n_errores, "PDF inválido / no descargable"),
-                unsafe_allow_html=True)
-
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-    # Bar horizontal de gravámenes más comunes
-    grav_cols = ["tiene_hipoteca", "tiene_leasing", "tiene_patrimonio_familia"]
-    grav_labels = {
-        "tiene_hipoteca": "Hipoteca",
-        "tiene_leasing": "Leasing",
-        "tiene_patrimonio_familia": "Patrimonio de familia",
-    }
-    grav_counts = []
-    for c in grav_cols:
-        n = int(df_ctl_view[c].fillna(False).astype(bool).sum())
-        grav_counts.append({"Gravamen": grav_labels[c], "Con gravamen": n})
-    g_df = pd.DataFrame(grav_counts).sort_values("Con gravamen", ascending=True)
-
-    col_left, col_right = st.columns(2)
-    with col_left:
-        fig_grav = go.Figure(go.Bar(
-            x=g_df["Con gravamen"], y=g_df["Gravamen"], orientation="h",
-            marker_color=[RED, "#F59E0B", MED],
-            text=g_df["Con gravamen"], textposition="outside",
-        ))
-        fig_grav.update_layout(
-            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-            title=dict(text=f"Gravámenes detectados · {sel_fuente_ctl}",
-                       font=dict(size=13, color=DEEP)),
-            height=300, margin=dict(l=10, r=60, t=44, b=10),
-            xaxis=dict(title="N° de CTLs con gravamen", gridcolor="#ede8f5"),
-            yaxis=dict(gridcolor="#ede8f5"),
-        )
-        st.plotly_chart(fig_grav, use_container_width=True, key="ctl_grav_bar")
-
-    with col_right:
-        # Desglose Aplica/No aplica por fuente
-        fuente_summary = (
-            df_ctl[df_ctl["error"].astype(str) == ""].assign(
-                estado=lambda d: d["aplica"].fillna(False).astype(bool).map(
-                    {True: "Aplica", False: "No aplica"}
-                )
-            )
-            .groupby(["fuente", "estado"])
-            .size().reset_index(name="N")
-        )
-        fig_src = go.Figure()
-        for estado, color in [("Aplica", GREEN_DARK), ("No aplica", "#9ca3af")]:
-            sub = fuente_summary[fuente_summary["estado"] == estado]
-            fig_src.add_trace(go.Bar(
-                name=estado, x=sub["fuente"], y=sub["N"],
-                marker_color=color, text=sub["N"], textposition="inside",
-            ))
-        fig_src.update_layout(
-            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-            title=dict(text="Aplican vs No aplican por fuente",
-                       font=dict(size=13, color=DEEP)),
-            barmode="stack", height=300, margin=dict(l=10, r=10, t=44, b=10),
-            xaxis=dict(title="Fuente", gridcolor="#ede8f5"),
-            yaxis=dict(title="CTLs", gridcolor="#ede8f5"),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0),
-        )
-        st.plotly_chart(fig_src, use_container_width=True, key="ctl_fuente_bar")
-
-    with st.expander("Detalle por nid · CTL + gravámenes", expanded=False):
-        cols_view = ["nid", "fuente", "tiene_hipoteca", "tiene_leasing",
-                     "tiene_patrimonio_familia", "aplica", "anotaciones_raw", "error"]
-        cols_view = [c for c in cols_view if c in df_ctl_view.columns]
-        st.dataframe(
-            df_ctl_view[cols_view].rename(columns={
-                "nid": "NID", "fuente": "Fuente",
-                "tiene_hipoteca": "Hipoteca",
-                "tiene_leasing": "Leasing",
-                "tiene_patrimonio_familia": "Patrimonio fam.",
-                "aplica": "Aplica",
-                "anotaciones_raw": "Anotaciones (raw)",
-                "error": "Error",
-            }),
-            hide_index=True, use_container_width=True,
-        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
