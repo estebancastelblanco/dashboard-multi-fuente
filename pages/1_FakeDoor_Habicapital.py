@@ -1479,17 +1479,29 @@ else:
     err_col = df_ctl_view["error"].fillna("").astype(str) if "error" in df_ctl_view.columns else pd.Series([""] * n_total)
     n_errores = int((err_col.str.strip() != "").sum())
     n_validos = n_total - n_errores
-    n_aplican = int(df_ctl_view["aplica"].fillna(False).astype(bool).sum())
-    n_no_aplican = n_validos - n_aplican
-    pct_aplica = (n_aplican / n_validos * 100) if n_validos else 0
-    # Solo patrimonio = patrimonio=True AND hipoteca=False AND leasing=False
-    # → recuperables (el patrimonio se puede levantar legalmente)
+
+    # aplica original (estricto): sin ningún gravamen
+    n_sin_gravamen = int(df_ctl_view["aplica"].fillna(False).astype(bool).sum())
+    # solo patrimonio = patrimonio=True AND hipoteca=False AND leasing=False
     mask_solo_pat = (
         (df_ctl_view["tiene_patrimonio_familia"].fillna(False).astype(bool))
         & (~df_ctl_view["tiene_hipoteca"].fillna(False).astype(bool))
         & (~df_ctl_view["tiene_leasing"].fillna(False).astype(bool))
     )
     n_solo_pat = int(mask_solo_pat.sum())
+
+    # aplica efectivo = sin gravamen + solo patrimonio (validando hijos mayores)
+    df_ctl_view = df_ctl_view.assign(
+        aplica_efectivo=lambda d: (
+            d["aplica"].fillna(False).astype(bool)
+            | (d["tiene_patrimonio_familia"].fillna(False).astype(bool)
+               & ~d["tiene_hipoteca"].fillna(False).astype(bool)
+               & ~d["tiene_leasing"].fillna(False).astype(bool))
+        )
+    )
+    n_aplican = int(df_ctl_view["aplica_efectivo"].sum())
+    n_no_aplican = n_validos - n_aplican
+    pct_aplica = (n_aplican / n_validos * 100) if n_validos else 0
 
     # Línea informativa con la cadena de filtros
     st.caption(
@@ -1498,21 +1510,18 @@ else:
         f"el subset filtrado por fuente."
     )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.markdown(kpi_card("CTL procesados", n_total, f"{sel_fuente_ctl}"),
                 unsafe_allow_html=True)
-    c2.markdown(kpi_card("Aplican (sin gravamen)",
+    c2.markdown(kpi_card("Aplican",
                          f"{n_aplican} ({pct_aplica:.0f}%)",
-                         "libre de hipoteca/leasing/patrimonio"),
+                         f"{n_sin_gravamen} sin gravamen + {n_solo_pat} solo patrimonio · "
+                         "validar hijos mayores"),
                 unsafe_allow_html=True)
-    c3.markdown(kpi_card("Solo patrimonio",
-                         f"{n_solo_pat} ({(n_solo_pat/n_validos*100 if n_validos else 0):.0f}%)",
-                         "recuperables · el patrimonio se levanta"),
-                unsafe_allow_html=True)
-    c4.markdown(kpi_card("No aplican", f"{n_no_aplican}",
+    c3.markdown(kpi_card("No aplican", f"{n_no_aplican}",
                          "con hipoteca o leasing"),
                 unsafe_allow_html=True)
-    c5.markdown(kpi_card("Errores CTL", n_errores, "PDF inválido / no descargable"),
+    c4.markdown(kpi_card("Errores CTL", n_errores, "PDF inválido / no descargable"),
                 unsafe_allow_html=True)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
@@ -1550,11 +1559,20 @@ else:
 
     with col_right:
         # Desglose Aplica/No aplica por fuente (excluye solo errores reales,
-        # no las filas donde error es NaN).
+        # no las filas donde error es NaN). Usa "aplica efectivo" = sin gravamen
+        # + solo patrimonio (validando hijos mayores).
         _err_full = df_ctl["error"].fillna("").astype(str).str.strip()
+        df_ctl_ok = df_ctl[_err_full == ""].assign(
+            aplica_efectivo=lambda d: (
+                d["aplica"].fillna(False).astype(bool)
+                | (d["tiene_patrimonio_familia"].fillna(False).astype(bool)
+                   & ~d["tiene_hipoteca"].fillna(False).astype(bool)
+                   & ~d["tiene_leasing"].fillna(False).astype(bool))
+            )
+        )
         fuente_summary = (
-            df_ctl[_err_full == ""].assign(
-                estado=lambda d: d["aplica"].fillna(False).astype(bool).map(
+            df_ctl_ok.assign(
+                estado=lambda d: d["aplica_efectivo"].map(
                     {True: "Aplica", False: "No aplica"}
                 )
             )
