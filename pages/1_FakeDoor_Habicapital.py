@@ -1549,9 +1549,11 @@ else:
         st.plotly_chart(fig_grav, use_container_width=True, key="ctl_grav_bar")
 
     with col_right:
-        # Desglose Aplica/No aplica por fuente
+        # Desglose Aplica/No aplica por fuente (excluye solo errores reales,
+        # no las filas donde error es NaN).
+        _err_full = df_ctl["error"].fillna("").astype(str).str.strip()
         fuente_summary = (
-            df_ctl[df_ctl["error"].astype(str) == ""].assign(
+            df_ctl[_err_full == ""].assign(
                 estado=lambda d: d["aplica"].fillna(False).astype(bool).map(
                     {True: "Aplica", False: "No aplica"}
                 )
