@@ -657,11 +657,32 @@ else:
         ]
 
         # Drill-down vía query_params (URL ?kpi=<slug>). Click en card recarga
-        # la página con el slug y el Desglose lee st.query_params para filtrar.
+        # la página con el slug y todas las secciones aguas abajo leen
+        # st.query_params para filtrarse.
         active_kpi_slug = st.query_params.get("kpi", "")
-        # Mapear slug → label legible para mostrar y filtrar
         SLUG_TO_LABEL = {slug: label for slug, label, _, _ in KPI_EVENTS}
+        SLUG_TO_EVENTS = {
+            "entraron": ["page_view_landing"],
+            "scroll50": ["scroll_50"],
+            "scroll75": ["scroll_75"],
+            "scroll100": ["scroll_100"],
+            "vio_compar": ["section_viewed_comparables"],
+            "eligio_compar": ["comparable_selected"],
+            "cta_venta": ["cta_continuar_venta"],
+            "asesor": ["cta_hablar_asesor", "whatsapp_click"],
+        }
         st.session_state["kpi_filter"] = SLUG_TO_LABEL.get(active_kpi_slug)
+
+        # Calcular subset de UUIDs que dispararon el evento del filtro.
+        # Si no hay filtro activo, kpi_uuids_filter = None (= sin restricción).
+        kpi_uuids_filter = None
+        if active_kpi_slug in SLUG_TO_EVENTS and not df_tracks.empty:
+            _target_events = SLUG_TO_EVENTS[active_kpi_slug]
+            _mask = pd.Series(False, index=df_tracks.index)
+            for ev in _target_events:
+                _mask |= df_tracks["event_name"].str.contains(ev, case=False, na=False)
+            kpi_uuids_filter = set(df_tracks.loc[_mask, "uuid"].dropna().astype(str).str.lower())
+        st.session_state["kpi_uuids_filter"] = kpi_uuids_filter
 
         # CSS de las cards-link (idéntico a .kcard pero con hover y estado activo)
         st.markdown(f"""
@@ -712,9 +733,20 @@ else:
 
         if st.session_state.get("kpi_filter"):
             st.caption(
-                f"Filtro activo en Desglose: nids cuyos UUIDs dispararon "
-                f"**{st.session_state['kpi_filter']}**. "
+                f"Filtro activo en TODAS las secciones de abajo: nids cuyos "
+                f"UUIDs dispararon **{st.session_state['kpi_filter']}**. "
                 "Click otra vez en la card para quitar el filtro."
+            )
+
+        # Aplicar el filtro de KPI a tracks_universe para las gráficas y la
+        # tabla de eventos. Si no hay filtro, tracks_universe queda como está.
+        if kpi_uuids_filter is not None:
+            tracks_universe = tracks_universe[
+                tracks_universe["uuid"].isin(kpi_uuids_filter)
+            ]
+            uuids_por_evento = (
+                tracks_universe.groupby("event_name")["uuid"].nunique()
+                .sort_values(ascending=False)
             )
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
@@ -784,27 +816,12 @@ st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 # dispararon ese evento en BQ tracks. Eso permite hacer drill-down desde
 # los KPIs de "Comportamiento en la landing" directo al Desglose.
 _kpi_active = st.session_state.get("kpi_filter")
+_kpi_uuids = st.session_state.get("kpi_uuids_filter")
 _df_apro_view = df_apro.copy()
-if _kpi_active and not df_tracks.empty:
-    _events_map = {
-        "Entraron landing": ["page_view_landing"],
-        "Scroll 50%": ["scroll_50"],
-        "Scroll 75%": ["scroll_75"],
-        "Scroll 100%": ["scroll_100"],
-        "Vio comparables": ["section_viewed_comparables"],
-        "Eligió comparable": ["comparable_selected"],
-        "Click CTA venta": ["cta_continuar_venta"],
-        "Habló con asesor": ["cta_hablar_asesor", "whatsapp_click"],
-    }
-    target_events = _events_map.get(_kpi_active, [])
-    if target_events:
-        _mask = pd.Series(False, index=df_tracks.index)
-        for ev in target_events:
-            _mask |= df_tracks["event_name"].str.contains(ev, case=False, na=False)
-        _uuids_evento = set(df_tracks.loc[_mask, "uuid"].dropna().astype(str).str.lower())
-        _df_apro_view = _df_apro_view[
-            _df_apro_view["deal_uuid"].astype(str).str.lower().isin(_uuids_evento)
-        ]
+if _kpi_active and _kpi_uuids is not None:
+    _df_apro_view = _df_apro_view[
+        _df_apro_view["deal_uuid"].astype(str).str.lower().isin(_kpi_uuids)
+    ]
 
 _desglose_title = f"Desglose ({len(_df_apro_view):,})"
 if _kpi_active:
@@ -877,11 +894,11 @@ st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Matriz por propietario</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# Universo: deals del Desglose (df_apro, ya filtrado por sidebar)
-if df_apro.empty:
+# Universo: deals del Desglose (df_apro, ya filtrado por sidebar + KPI si aplica)
+if _df_apro_view.empty:
     st.info("Sin deals para el filtro actual.")
 else:
-    owners_base = df_apro.drop_duplicates("nid").copy()
+    owners_base = _df_apro_view.drop_duplicates("nid").copy()
     owners_base["owner_id"] = owners_base["hubspot_owner_id"].astype(str)
     owners_base["owner_label"] = (
         owners_base["owner_name"].fillna("").astype(str).str.strip()
