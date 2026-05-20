@@ -713,8 +713,18 @@ else:
         }}
         section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] {{
             background: {PRIMARY} !important;
-            color: white !important;
+            color: #ffffff !important;
             border-color: {PRIMARY} !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] *,
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] p,
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] div {{
+            color: #ffffff !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"]:hover {{
+            background: {DEEP} !important;
+            border-color: {DEEP} !important;
+            color: #ffffff !important;
         }}
         </style>
         """, unsafe_allow_html=True)
