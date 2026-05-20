@@ -1224,21 +1224,34 @@ else:
                 elif PERIODO_2026:
                     age_df = df_escriturados_age.copy()
                     product_order_age = [p for p in product_order if p in set(age_df["producto"].astype(str))]
-                    corr = age_df["edad"].corr(age_df["score_crediticio"])
                     n_above_720 = int((age_df["score_crediticio"] >= 720).sum())
                     pct_above_720 = (n_above_720 / len(age_df) * 100) if len(age_df) else 0.0
-                    k1, k2, k3, k4, k5 = st.columns(5)
+                    k1, k2, k3, k4 = st.columns(4)
                     k1.markdown(kpi_card("Personas", int(len(age_df)), "edad + score"), unsafe_allow_html=True)
                     k2.markdown(kpi_card("Edad promedio", f"{age_df['edad'].mean():.1f}", "años"), unsafe_allow_html=True)
                     k3.markdown(kpi_card("Score promedio", f"{age_df['score_crediticio'].mean():.0f}", "Experian"), unsafe_allow_html=True)
                     k4.markdown(kpi_card("Score ≥ 720", n_above_720, f"{pct_above_720:.1f}% del universo"), unsafe_allow_html=True)
-                    k5.markdown(kpi_card("Correlación", f"{0.0 if pd.isna(corr) else corr:.2f}", "edad vs score"), unsafe_allow_html=True)
 
                     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                    # Selector de producto (radio horizontal con Todos + 3 productos)
+                    prod_opts = ["Todos"] + product_order_age
+                    sel_prod = st.radio(
+                        "Producto",
+                        prod_opts, horizontal=True, index=0,
+                        key="age_vs_score_prod",
+                        help="Filtra el scatter y la matriz por producto. "
+                             "Verde = score ≥ 720 (elegible), rojo = score < 720.",
+                    )
+                    age_view = age_df.copy() if sel_prod == "Todos" else age_df[age_df["producto"] == sel_prod].copy()
 
                     # Bucketizar edades en rangos de 10 años (20s, 30s, ..., 70+)
                     age_bins = [20, 30, 40, 50, 60, 70, 200]
                     age_labels = ["20-29", "30-39", "40-49", "50-59", "60-69", "70+"]
+                    age_view["rango_edad"] = pd.cut(
+                        age_view["edad"], bins=age_bins, labels=age_labels, right=False
+                    )
+                    # También aplicar a age_df para el boxplot de abajo
                     age_df["rango_edad"] = pd.cut(
                         age_df["edad"], bins=age_bins, labels=age_labels, right=False
                     )
@@ -1247,64 +1260,92 @@ else:
                         else ("≥720 (elegible)" if s >= 720 else "<720")
                     )
 
+                    # KPIs del subset filtrado por producto
+                    n_view = len(age_view)
+                    n_elig = int((age_view["score_crediticio"] >= 720).sum())
+                    n_no_elig = n_view - n_elig
+                    pct_elig = n_elig / n_view * 100 if n_view else 0
+                    st.markdown(
+                        f"<div style='color:{MED};font-size:0.85rem;margin-bottom:8px'>"
+                        f"<b>{sel_prod}</b> · {n_view} personas · "
+                        f"<span style='color:{GREEN_DARK}'>{n_elig} elegibles ≥720 ({pct_elig:.0f}%)</span> · "
+                        f"<span style='color:{RED}'>{n_no_elig} no elegibles</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
                     corr_left, corr_right = st.columns(2)
                     with corr_left:
-                        sin_vida = age_df[age_df["score_crediticio"] == 0]
-                        con_vida = age_df[age_df["score_crediticio"] > 0]
+                        # Scatter coloreado por elegibilidad
+                        elig = age_view[age_view["score_crediticio"] >= 720]
+                        no_elig = age_view[age_view["score_crediticio"] < 720]
                         fig_scatter = go.Figure()
-                        fig_scatter.add_trace(go.Scatter(
-                            x=con_vida["edad"], y=con_vida["score_crediticio"],
-                            mode="markers", name="Con vida crediticia",
-                            opacity=0.55,
-                            marker=dict(size=7, color=PRIMARY),
-                            hovertemplate="Edad: %{x}<br>Score: %{y}<extra></extra>",
-                        ))
-                        if not sin_vida.empty:
+                        if not no_elig.empty:
                             fig_scatter.add_trace(go.Scatter(
-                                x=sin_vida["edad"], y=sin_vida["score_crediticio"],
-                                mode="markers", name="Sin vida (score=0)",
-                                marker=dict(size=10, color=RED, symbol="x", line=dict(width=2)),
-                                hovertemplate="Edad: %{x}<br>Score: 0<extra></extra>",
+                                x=no_elig["edad"], y=no_elig["score_crediticio"],
+                                mode="markers", name=f"<720 ({len(no_elig)})",
+                                opacity=0.6,
+                                marker=dict(size=8, color=RED),
+                                customdata=no_elig.get("producto", pd.Series(dtype=str)),
+                                hovertemplate="Edad: %{x}<br>Score: %{y}<br>%{customdata}<extra></extra>",
+                            ))
+                        if not elig.empty:
+                            fig_scatter.add_trace(go.Scatter(
+                                x=elig["edad"], y=elig["score_crediticio"],
+                                mode="markers", name=f"≥720 ({len(elig)})",
+                                opacity=0.7,
+                                marker=dict(size=8, color=GREEN_DARK),
+                                customdata=elig.get("producto", pd.Series(dtype=str)),
+                                hovertemplate="Edad: %{x}<br>Score: %{y}<br>%{customdata}<extra></extra>",
                             ))
                         fig_scatter.add_hline(
-                            y=720, line=dict(color=GREEN_DARK, width=2, dash="dash"),
+                            y=720, line=dict(color=DEEP, width=2, dash="dash"),
                             annotation_text="Umbral 720", annotation_position="right",
-                            annotation_font=dict(color=GREEN_DARK, size=10),
-                        )
-                        fig_scatter.add_hline(
-                            y=0, line=dict(color=RED, width=1, dash="dot"),
-                            annotation_text="Sin vida", annotation_position="right",
-                            annotation_font=dict(color=RED, size=10),
+                            annotation_font=dict(color=DEEP, size=10),
                         )
                         fig_scatter.update_layout(
                             paper_bgcolor=WHITE, plot_bgcolor=WHITE,
                             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                            title=dict(text="Dispersión edad vs score", font=dict(size=13, color=DEEP)),
+                            title=dict(text=f"Dispersión edad vs score · {sel_prod}",
+                                       font=dict(size=13, color=DEEP)),
                             xaxis=dict(title="Edad", gridcolor="#ede8f5"),
                             yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                            height=380, margin=dict(l=10, r=80, t=40, b=10),
-                            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0),
+                            height=420, margin=dict(l=10, r=80, t=44, b=10),
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.22, x=0),
                         )
                         st.plotly_chart(fig_scatter, use_container_width=True)
 
                     with corr_right:
-                        fig_heat = go.Figure(go.Histogram2d(
-                            x=age_df["edad"],
-                            y=age_df["score_crediticio"],
-                            colorscale=[[0, "#F4F1F9"], [1, PRIMARY]],
-                            nbinsx=16,
-                            nbinsy=16,
-                            hovertemplate="Edad %{x}<br>Score %{y}<br>N %{z}<extra></extra>",
-                        ))
-                        fig_heat.update_layout(
+                        # Densidad: cuántas personas por bucket (edad, banda_score)
+                        # Stacked bar de elegibles vs no elegibles por rango de edad
+                        view_summary = (
+                            age_view.assign(
+                                elegible=lambda d: (d["score_crediticio"] >= 720).map(
+                                    {True: "≥720", False: "<720"}
+                                )
+                            )
+                            .groupby(["rango_edad", "elegible"], observed=True)
+                            .size().reset_index(name="N")
+                        )
+                        fig_dens = go.Figure()
+                        for banda, color in [("<720", RED), ("≥720", GREEN_DARK)]:
+                            sub = view_summary[view_summary["elegible"] == banda]
+                            fig_dens.add_trace(go.Bar(
+                                name=banda, x=sub["rango_edad"].astype(str), y=sub["N"],
+                                marker_color=color, text=sub["N"], textposition="inside",
+                            ))
+                        fig_dens.update_layout(
                             paper_bgcolor=WHITE, plot_bgcolor=WHITE,
                             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-                            title=dict(text="Matriz de concentración", font=dict(size=13, color=DEEP)),
-                            xaxis=dict(title="Edad", gridcolor="#ede8f5"),
-                            yaxis=dict(title="Score crediticio", gridcolor="#ede8f5"),
-                            height=380, margin=dict(l=10, r=10, t=40, b=10),
+                            title=dict(text=f"Personas por rango de edad · {sel_prod}",
+                                       font=dict(size=13, color=DEEP)),
+                            barmode="stack",
+                            height=420, margin=dict(l=10, r=10, t=44, b=10),
+                            xaxis=dict(title="Rango de edad", gridcolor="#ede8f5"),
+                            yaxis=dict(title="Personas", gridcolor="#ede8f5"),
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.22, x=0),
                         )
-                        st.plotly_chart(fig_heat, use_container_width=True)
+                        st.plotly_chart(fig_dens, use_container_width=True)
 
                     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                     fig_box = go.Figure()
