@@ -1587,6 +1587,10 @@ else:
     else:
         df_llm_f = df_llm.copy()
 
+    # Excluir los "Sin motivo cargado" — solo mostramos los que sí pudo
+    # clasificar el LLM (tienen motivo_venta_string del recepcionista).
+    df_llm_f = df_llm_f[df_llm_f["categoria_llm"] != "Sin motivo cargado"].copy()
+
     if df_llm_f.empty:
         st.info("Ningún nid del LLM cruza con los filtros actuales del sidebar.")
     else:
@@ -1727,9 +1731,12 @@ def _mini_funnel_fakedoor(nids_subset: set[int], titulo: str, color: str) -> go.
 
 
 # Mini-funnels candidatos vs no-candidatos en la sección "Categorías cliente LLM"
+# Excluimos "Sin motivo cargado" para que el mini-funnel solo cubra los nids
+# que realmente fueron clasificados.
 if _LLM_CSV.exists():
     df_llm_full = pd.read_csv(_LLM_CSV)
     df_llm_full["nid"] = pd.to_numeric(df_llm_full["nid"], errors="coerce")
+    df_llm_full = df_llm_full[df_llm_full["categoria_llm"] != "Sin motivo cargado"]
     nids_cand_motivo = set(df_llm_full[df_llm_full["candidato_credito"] == True]["nid"]
                             .dropna().astype(int).tolist())
     nids_no_cand_motivo = set(df_llm_full[df_llm_full["candidato_credito"] == False]["nid"]
