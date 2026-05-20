@@ -106,20 +106,16 @@ def main() -> None:
         sys.exit("OPENAI_API_KEY no está en env.")
 
     bq = bq_src._client()
-    print("Cargando nids del FakeDoor con motivos...")
+    print("Cargando nids del FakeDoor (ab_test_landing IN ('AH','BH')) con motivos...")
+    # Universo: deals con AH o BH = clientes que abrieron la landing y el JS
+    # les asignó variante. Es más confiable que el cruce con BQ events porque
+    # incluye nids cuyo Segment tracking falló pero sí abrieron.
     sql = r"""
-    WITH abrieron AS (
-      SELECT DISTINCT REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid
-      FROM `sellers-main-prod.javascript9.pages`
-      WHERE context_page_url LIKE 'https://habicapitalliquidez.vercel.app/%'
-    ),
-    deals AS (
-      SELECT CAST(nid AS INT64) AS nid, LOWER(deal_uuid) AS uuid
+    WITH nids_landing AS (
+      SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
-      WHERE deal_uuid IS NOT NULL AND nid IS NOT NULL
-    ),
-    nids_abrieron AS (
-      SELECT DISTINCT d.nid FROM deals d JOIN abrieron a ON a.uuid = d.uuid
+      WHERE ab_test_landing IN ('AH', 'BH')
+        AND nid IS NOT NULL
     ),
     motivos AS (
       SELECT CAST(nid AS INT64) AS nid,
@@ -130,7 +126,7 @@ def main() -> None:
     )
     SELECT m.nid, m.motivo
     FROM motivos m
-    INNER JOIN nids_abrieron a ON a.nid = m.nid
+    INNER JOIN nids_landing l ON l.nid = m.nid
     """
     df = bq.query(sql).to_dataframe()
     print(f"  {len(df)} nids para clasificar")

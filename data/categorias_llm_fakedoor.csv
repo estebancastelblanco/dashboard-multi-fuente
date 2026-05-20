@@ -1,23 +1,24 @@
 nid,motivo_original,categoria_llm,candidato_credito,razon_llm
+59104339372,Por separación,Separación / divorcio,False,"División de bienes, no van a conservar el inmueble"
 59246737322,cambio de casa,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
-59273323296,Está fallando acabados y estrato 4,Cambio personal o familiar,False,Problemas con el inmueble debido a acabados fallidos.
+59273323296,Está fallando acabados y estrato 4,Cambio personal o familiar,False,Problemas con el inmueble debido a fallas en acabados.
 59313791818,Cambio de casa,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
 59319213951,"Compro, remodeló y vendo. Hago flipping",Quiere invertir en otro negocio,True,Busca capital para emprender en el negocio de flipping de inmuebles.
-59424241416,Tengo pendiente otro negocio,Quiere invertir en otro negocio,True,Necesita capital para emprender.
+59424241416,Tengo pendiente otro negocio,Quiere invertir en otro negocio,True,Necesita capital para emprender un nuevo proyecto.
 59431393040,Para un negocio,Quiere invertir en otro negocio,True,Necesita capital para emprender o aprovechar una oportunidad.
 59434674547,Para comprar otro inmueble,Quiere comprar otro inmueble,False,Quiere mudarse o invertir en otro inmueble — necesita liquidar
 59455840558,Cambio de casa,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
 59472897814,cambio de vivienda,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
-59527527985,Es que la familia trabaja en bogota por distancia,Mudanza / cambio de ciudad,False,La familia se traslada a Bogotá y no seguirá con el inmueble.
+59527527985,Es que la familia trabaja en bogota por distancia,Mudanza / cambio de ciudad,False,La familia se traslada a Bogotá por la distancia al inmueble actual.
 59554229032,Cambio de apartamento,Cambio de vivienda,False,El cliente busca un apartamento más grande o en otra zona.
-59562406983,Utilizar el dinero para otro proyecto,Quiere invertir en otro negocio,True,Necesita capital para emprender un nuevo proyecto.
+59562406983,Utilizar el dinero para otro proyecto,Quiere invertir en otro negocio,True,Necesita capital para emprender o aprovechar una oportunidad.
 59575731620,"Me interesa saber las 2 | Deseo tener efectivo primero, para posterior comprar otro inmueble",Quiere comprar otro inmueble,False,Desea liquidar para tener efectivo antes de comprar otro inmueble.
 59609308958,cambio de casa,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
 59634221910,Vender,Otro / no claro,False,Motivo de venta ambiguo sin información suficiente.
-59665433759,Lo quiero vender para invertir el dinero en un negocio,Quiere invertir en otro negocio,True,Busca capital para emprender un nuevo negocio.
+59665433759,Lo quiero vender para invertir el dinero en un negocio,Quiere invertir en otro negocio,True,Busca capital para emprender o aprovechar una oportunidad de inversión.
 59674278524,Pienso ubicarme en el campo,Mudanza / cambio de ciudad,False,"Se va a vivir a otra parte, no sigue con el inmueble."
-59693142311,No quiero seguir arrendando,Otro / no claro,False,El motivo no especifica claramente la intención de venta o el contexto detrás de no querer arrendar.
-59755544487,Compra de una casa en Ibagué tolima,Quiere comprar otro inmueble,False,Quiere mudarse o invertir en otro inmueble — necesita liquidar
+59693142311,No quiero seguir arrendando,Otro / no claro,False,El motivo no especifica claramente la intención de venta o cambio.
+59755544487,Compra de una casa en Ibagué tolima,Quiere comprar otro inmueble,False,Necesita liquidar para adquirir una nueva casa en Ibagué.
 59758050725,Consulta sobre compra directa | Necesito la plata,Necesita liquidez urgente,True,El cliente necesita dinero de manera urgente.
 59774459029,Comprar otro inmueble,Quiere comprar otro inmueble,False,Quiere mudarse o invertir en otro inmueble — necesita liquidar
 59802668366,Porque quiero comprar en el sur,Quiere comprar otro inmueble,False,Quiere mudarse o invertir en otro inmueble — necesita liquidar
@@ -28,7 +29,7 @@ nid,motivo_original,categoria_llm,candidato_credito,razon_llm
 60060851998,Pasear en Asia,Viaje / vida fuera del país,False,Se trasladará al exterior y no conservará el inmueble.
 60076286763,Cambiar de vivienda,Cambio de vivienda,False,Busca un inmueble más grande o en otra zona.
 60102825608,Comprar otra vivienda,Quiere comprar otro inmueble,False,Quiere mudarse o invertir en otro inmueble — necesita liquidar
-60151291477,Necesito el dinero,Necesita liquidez urgente,True,El cliente tiene deudas y gastos urgentes que requieren dinero inmediato.
+60151291477,Necesito el dinero,Necesita liquidez urgente,True,El cliente tiene problemas de plata y necesita liquidez sin querer vender.
 60175006747,Motivos personales,Otro / no claro,False,Motivo ambiguo o sin información suficiente
 60187622739,Viaje,Viaje / vida fuera del país,False,Se trasladará al exterior y no conservará el inmueble.
 60196811645,Cambiar a casa,Cambio de vivienda,False,El cliente busca un inmueble más grande o en otra zona.
