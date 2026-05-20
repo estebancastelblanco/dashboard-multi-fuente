@@ -16,6 +16,7 @@ DATA_DIR = ROOT / "data"
 INPUTS = [
     (Path("/Users/usermac/Hc/ibuyer.xlsx"), "iBuyer"),
     (Path("/Users/usermac/Hc/alianza.xlsx"), "Alianza"),
+    (ROOT / "data" / "inmo.xlsx", "Inmobiliaria"),
 ]
 EXPERIAN_CSV = DATA_DIR / "experian_check_executions_2026-05-15.csv"
 OUTPUT_CSV = DATA_DIR / "escriturados_2026_age_score.csv"
@@ -44,7 +45,11 @@ def load_source_rows() -> pd.DataFrame:
     rows: list[dict] = []
     for path, producto in INPUTS:
         df = pd.read_excel(path)
-        link_cols = [c for c in df.columns if "Cédula" in c or "cedula" in c or "ciudadania" in c or "ciudadanía" in c]
+        # Case-insensitive: detecta "Cedula", "Cédula", "cedula", "Cedula Vendedor 1", etc.
+        link_cols = [
+            c for c in df.columns
+            if any(k in c.lower() for k in ("cedula", "cédula", "ciudadania", "ciudadanía"))
+        ]
         for _, row in df.iterrows():
             nid = str(row["Título"]).strip()
             for col in link_cols:
