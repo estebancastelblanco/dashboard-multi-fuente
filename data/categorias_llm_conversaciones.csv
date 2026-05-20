@@ -1,0 +1,85 @@
+nid,conv_chars,categoria_llm,candidato_credito,razon_llm
+16430218675,231,Otro / no claro,False,No hay información suficiente sobre la intención de vender.
+17652356537,4000,Necesita liquidez urgente,True,la necesito pero de carácter super urgente
+23300829500,1400,Otro / no claro,False,El cliente está indeciso sobre el valor de venta y espera más información sobre la zona.
+32241636769,3962,Otro / no claro,False,No se menciona un motivo claro para la venta.
+33630811945,4000,Otro / no claro,False,No se menciona un motivo claro para la venta del inmueble.
+33901098654,163,Otro / no claro,False,Motivo ambiguo o sin información suficiente
+34103730854,3089,Necesita liquidez urgente,True,Necesita urgentemente de tu colaboración para continuar el proceso.
+34727010320,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+35771071537,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+36766800001,4000,Otro / no claro,False,No se menciona un motivo claro para vender o no vender el inmueble.
+38612439111,346,Otro / no claro,False,No se menciona un motivo claro para la venta.
+39609820694,629,Otro / no claro,False,No hay información suficiente sobre la intención del cliente.
+39693542443,263,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+48552349711,3636,Otro / no claro,False,El cliente no está convencido con la oferta de compra directa.
+51116981036,3538,Necesita liquidez urgente,True,tiene hipoteca con banco de bogotá
+53118151183,853,Otro / no claro,False,No se proporciona información suficiente sobre la intención de venta.
+53266009959,2388,Otro / no claro,False,No se menciona un motivo claro para vender o no vender el inmueble.
+53855430725,4000,Otro / no claro,False,No se especifica claramente el motivo de la venta.
+54116235686,995,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+55371768576,2505,Necesita liquidez urgente,True,Requiere venderlo con prontitud debido a un embargo vigente.
+55506907425,1092,Otro / no claro,False,No se proporciona información suficiente sobre el motivo de la venta.
+55577119513,3201,Quiere comprar otro inmueble,False,Voy a comprar pero en un año
+55939565750,2613,Otro / no claro,False,"La cliente está ansiosa por que termine el proceso, pero no se menciona un motivo claro para la venta."
+56039579688,709,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+56120510224,139,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+56250683676,1722,Quiere invertir en otro negocio,True,vendiendo por reversión de inversión
+56294769193,2567,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+56499541078,15,Otro / no claro,False,No hay información suficiente
+56532353633,1435,Otro / no claro,False,No se menciona un motivo claro para vender el inmueble.
+56710234253,4000,Viaje / vida fuera del país,False,me estoy proyectando para irme del pais
+56895215177,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+56948217187,2337,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+57247749033,96,Otro / no claro,False,No hay información suficiente sobre el motivo de la conversación.
+57257946908,3047,Otro / no claro,False,No se menciona un motivo claro para vender o no vender el inmueble.
+57493988418,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+57945160533,618,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+57985074566,1485,Otro / no claro,False,No se menciona un motivo claro para vender o no vender.
+58176651931,240,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+58181865611,2708,Otro / no claro,False,La conversación no proporciona un motivo claro para la venta.
+58276960908,4000,Otro / no claro,False,El cliente considera otras opciones y no está seguro sobre la venta.
+58301488398,133,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+58322414363,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+58324289329,327,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+58353021849,4000,Necesita liquidez urgente,True,tienen deuda con davivienda de 16 millones
+58368042559,323,Otro / no claro,False,El cliente no quiere vender en este momento.
+58374396484,36,Otro / no claro,False,No hay información suficiente sobre el motivo
+58416602939,387,Otro / no claro,False,No se proporciona información suficiente sobre el motivo de la venta.
+58440598040,327,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+58579061320,378,Otro / no claro,False,No hay información suficiente sobre el motivo de la conversación.
+58581688716,991,Otro / no claro,False,El cliente considera que la oferta es muy baja y no ha continuado con el proceso.
+58637503804,4000,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+58640275012,2586,Otro / no claro,False,No se menciona un motivo claro para la venta.
+58866586782,306,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+58879072612,1448,Otro / no claro,False,El cliente no está interesado en vender a un precio inferior al que considera adecuado.
+58879233406,3424,Otro / no claro,False,No hay información suficiente sobre la intención de vender o conservar el inmueble.
+58936350598,340,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+59091661613,329,Otro / no claro,False,No se especifica el motivo de la venta
+59128292100,842,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+59157015061,282,Otro / no claro,False,No se proporciona un motivo claro para no vender.
+59172401497,4000,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+59246737322,3547,Otro / no claro,False,"El cliente parece confundido sobre el proceso de venta y ha enviado documentos, pero no se menciona un motivo claro para vender."
+59248507529,842,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+59385355069,501,Otro / no claro,False,No se especifica el motivo de la venta.
+59431393040,987,Otro / no claro,False,No se menciona un motivo específico para la venta.
+59480873135,1150,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+59559771664,747,Otro / no claro,False,No está interesada en vender en este momento.
+59563180831,1859,Otro / no claro,False,No se especifica un motivo claro para la venta.
+59577279842,75,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+59665433759,842,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+59700992568,81,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+59723401546,680,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+59763008821,881,Necesita liquidez urgente,True,Deuda alta con compensar
+59770545735,903,Otro / no claro,False,El valor ofrecido es muy bajo y no le sirve
+59774459029,1298,Otro / no claro,False,No se menciona un motivo claro para vender el inmueble.
+59777161273,276,Otro / no claro,False,No hay información suficiente sobre el motivo de la venta.
+59803235431,4000,Necesita liquidez urgente,True,No puede endeudarse más y necesita dinero para pagar escrituras.
+59836471162,1882,Quiere invertir en otro negocio,True,motivo de venta: inversion
+59841966601,16,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+59964570023,1440,Otro / no claro,False,No se especifica el motivo de la venta.
+59965817639,1167,Otro / no claro,False,No se menciona un motivo claro para la venta.
+60013399809,1437,Otro / no claro,False,No hay información suficiente sobre la intención de venta.
+60076286763,155,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+60120383776,757,Otro / no claro,False,No hay información suficiente sobre el motivo del cliente.
+60199062807,772,Otro / no claro,False,No se especifica el motivo de la venta.

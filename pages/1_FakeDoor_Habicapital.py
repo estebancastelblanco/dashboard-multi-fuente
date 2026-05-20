@@ -1666,6 +1666,211 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helper: mini-funnel 5 etapas para un subset de nids
+# Etapas: Segmentado → Abrió landing → T&C → Elegibles → Aplican (sin hipoteca)
+# ─────────────────────────────────────────────────────────────────────────────
+def _mini_funnel_fakedoor(nids_subset: set[int], titulo: str, color: str) -> go.Figure:
+    """Construye un mini-funnel para un subset de nids."""
+    n_segmentados = len(nids_subset)
+    # Abrió landing: tiene ab_test_landing en AH/BH
+    nids_landing = set(
+        df_hs[df_hs.get("ab_test_landing", pd.Series(dtype=str)).isin(["AH", "BH"])]
+        .get("nid", pd.Series(dtype=float)).dropna().astype(int).tolist()
+    ) if not df_hs.empty else set()
+    n_abrio = len(nids_subset & nids_landing)
+    # T&C: aparece en df_leads (Sheet) → cruzar por uuid
+    leads_uuids = set(df_leads.get("uuid_str", pd.Series(dtype=str))
+                      .dropna().astype(str).str.lower()) if "uuid_str" in df_leads.columns else set()
+    if not leads_uuids and "telefono" in df_leads.columns:
+        # fallback: usar nid directo si está en df merged más abajo. Mejor cruzar
+        # nids via df_in (que ya tiene merge con HS).
+        pass
+    # Cruce más simple vía df_in: df_in tiene nid (de HS merge) y aplica
+    nids_tyc = set(df_in["nid"].dropna().astype(int).tolist()) if "nid" in df_in.columns else set()
+    n_tyc = len(nids_subset & nids_tyc)
+    # Elegibles = aplica="si"
+    nids_elegibles = set(
+        df_in.loc[df_in["aplica"].astype(str).str.lower() == "si", "nid"]
+        .dropna().astype(int).tolist()
+    ) if "aplica" in df_in.columns else set()
+    n_elegibles = len(nids_subset & nids_elegibles)
+    # Aplican = elegibles sin hipoteca
+    nids_aplican = set(
+        df_in.loc[
+            (df_in["aplica"].astype(str).str.lower() == "si")
+            & (df_in.get("hipoteca_status", pd.Series(dtype=str)) == "No"),
+            "nid",
+        ].dropna().astype(int).tolist()
+    ) if "aplica" in df_in.columns else set()
+    n_aplican = len(nids_subset & nids_aplican)
+
+    labels = ["Segmentado", "Abrió landing", "T&C firmado", "Elegibles", "Aplican"]
+    vals = [n_segmentados, n_abrio, n_tyc, n_elegibles, n_aplican]
+    text = [
+        f"{v:,}" + (f" ({v/vals[0]*100:.0f}%)" if vals[0] > 0 and i > 0 else "")
+        for i, v in enumerate(vals)
+    ]
+    fig = go.Figure(go.Bar(
+        x=vals, y=labels, orientation="h",
+        marker_color=color, text=text,
+        textposition="outside", textfont=dict(size=11, color=DEEP),
+    ))
+    fig.update_layout(
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        title=dict(text=titulo, font=dict(size=12, color=DEEP)),
+        height=240, margin=dict(l=10, r=70, t=36, b=10),
+        xaxis=dict(gridcolor="#ede8f5", tickformat=",d"),
+        yaxis=dict(autorange="reversed"),
+    )
+    return fig
+
+
+# Mini-funnels candidatos vs no-candidatos en la sección "Categorías cliente LLM"
+if _LLM_CSV.exists():
+    df_llm_full = pd.read_csv(_LLM_CSV)
+    df_llm_full["nid"] = pd.to_numeric(df_llm_full["nid"], errors="coerce")
+    nids_cand_motivo = set(df_llm_full[df_llm_full["candidato_credito"] == True]["nid"]
+                            .dropna().astype(int).tolist())
+    nids_no_cand_motivo = set(df_llm_full[df_llm_full["candidato_credito"] == False]["nid"]
+                               .dropna().astype(int).tolist())
+    if nids_cand_motivo or nids_no_cand_motivo:
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<h3 style='color:{DEEP};font-size:1rem;margin:0'>"
+            f"Mini-funnel FakeDoor · candidatos vs no candidatos (por motivo)</h3>",
+            unsafe_allow_html=True,
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.plotly_chart(
+                _mini_funnel_fakedoor(nids_cand_motivo, "Candidatos (verde)", GREEN_DARK),
+                use_container_width=True, key="funnel_motivo_cand",
+            )
+        with col_b:
+            st.plotly_chart(
+                _mini_funnel_fakedoor(nids_no_cand_motivo, "No candidatos (gris)", "#9ca3af"),
+                use_container_width=True, key="funnel_motivo_no_cand",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Categorías clientes por conversación (LLM sobre WhatsApp + transcripciones)
+# CSV pre-generado: data/categorias_llm_conversaciones.csv
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Categorías clientes por conversación</h2>", unsafe_allow_html=True)
+
+_CONV_CSV = REPO_ROOT / "data" / "categorias_llm_conversaciones.csv"
+if not _CONV_CSV.exists():
+    st.info("Aún no hay clasificación de conversaciones. Corre scripts/classify_conversaciones_llm.py.")
+else:
+    df_conv = pd.read_csv(_CONV_CSV)
+    df_conv["nid"] = pd.to_numeric(df_conv["nid"], errors="coerce")
+
+    if not df_hs_f.empty and "nid" in df_hs_f.columns:
+        nids_visibles_conv = set(df_hs_f["nid"].dropna().astype(int).tolist())
+        df_conv_f = df_conv[df_conv["nid"].isin(nids_visibles_conv)].copy()
+    else:
+        df_conv_f = df_conv.copy()
+
+    if df_conv_f.empty:
+        st.info("Ningún nid del LLM-conversaciones cruza con los filtros del sidebar.")
+    else:
+        n_total = len(df_conv_f)
+        n_cand = int(df_conv_f["candidato_credito"].sum())
+        n_no_cand = n_total - n_cand
+
+        cl1, cl2, cl3 = st.columns(3)
+        cl1.markdown(kpi_card("Leads con conversación", n_total,
+                              "WhatsApp + llamadas transcritas"),
+                     unsafe_allow_html=True)
+        cl2.markdown(kpi_card("Candidatos al crédito", f"{n_cand} ({n_cand/n_total*100:.0f}%)",
+                              "querían conservar el inmueble"),
+                     unsafe_allow_html=True)
+        cl3.markdown(kpi_card("No candidatos", f"{n_no_cand} ({n_no_cand/n_total*100:.0f}%)",
+                              "necesitaban vender"),
+                     unsafe_allow_html=True)
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+        cat_summary = (
+            df_conv_f.groupby(["categoria_llm", "candidato_credito"])
+            .size().reset_index(name="N")
+        )
+        cat_order = cat_summary.groupby("categoria_llm")["N"].sum().sort_values(ascending=True).index.tolist()
+        cat_summary["categoria_llm"] = pd.Categorical(
+            cat_summary["categoria_llm"], categories=cat_order, ordered=True
+        )
+        cat_summary = cat_summary.sort_values("categoria_llm")
+        cat_summary["color"] = cat_summary["candidato_credito"].map(
+            {True: GREEN_DARK, False: "#9ca3af"}
+        )
+
+        fig_conv = go.Figure(go.Bar(
+            x=cat_summary["N"], y=cat_summary["categoria_llm"].astype(str),
+            orientation="h", marker_color=cat_summary["color"],
+            text=cat_summary["N"], textposition="outside",
+            customdata=cat_summary["candidato_credito"].map(
+                {True: "Candidato al crédito", False: "No candidato"}
+            ),
+            hovertemplate="<b>%{y}</b><br>%{x} leads · %{customdata}<extra></extra>",
+        ))
+        fig_conv.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=max(360, len(cat_order) * 32 + 80),
+            margin=dict(l=220, r=50, t=10, b=10),
+            xaxis=dict(title="Leads", gridcolor="#ede8f5"),
+            yaxis=dict(gridcolor="#ede8f5", automargin=True),
+        )
+        st.plotly_chart(fig_conv, use_container_width=True, key="cat_conv_chart")
+        st.caption(
+            "Verde = candidato al crédito (cliente quiere conservar el inmueble). "
+            "Gris = no candidato. Clasificación con gpt-4o-mini sobre conversaciones "
+            "(WhatsApp + transcripciones de llamadas) de leads con "
+            "oportunidad ∈ {Cierre, No interesado, Rechazó oferta}."
+        )
+
+        # Mini-funnels candidato vs no candidato (mismo formato que motivo arriba)
+        nids_cand_conv = set(df_conv_f[df_conv_f["candidato_credito"] == True]["nid"]
+                              .dropna().astype(int).tolist())
+        nids_no_cand_conv = set(df_conv_f[df_conv_f["candidato_credito"] == False]["nid"]
+                                 .dropna().astype(int).tolist())
+        if nids_cand_conv or nids_no_cand_conv:
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<h3 style='color:{DEEP};font-size:1rem;margin:0'>"
+                f"Mini-funnel FakeDoor · candidatos vs no candidatos (por conversación)</h3>",
+                unsafe_allow_html=True,
+            )
+            col_c, col_d = st.columns(2)
+            with col_c:
+                st.plotly_chart(
+                    _mini_funnel_fakedoor(nids_cand_conv, "Candidatos (verde)", GREEN_DARK),
+                    use_container_width=True, key="funnel_conv_cand",
+                )
+            with col_d:
+                st.plotly_chart(
+                    _mini_funnel_fakedoor(nids_no_cand_conv, "No candidatos (gris)", "#9ca3af"),
+                    use_container_width=True, key="funnel_conv_no_cand",
+                )
+
+        with st.expander("Detalle por nid · razón LLM (conversación)", expanded=False):
+            cols_view = ["nid", "categoria_llm", "candidato_credito",
+                         "conv_chars", "razon_llm"]
+            st.dataframe(
+                df_conv_f[cols_view].rename(columns={
+                    "nid": "NID",
+                    "categoria_llm": "Categoría LLM",
+                    "candidato_credito": "Candidato",
+                    "conv_chars": "Chars conversación",
+                    "razon_llm": "Razón LLM",
+                }),
+                hide_index=True, use_container_width=True,
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Funnel de usabilidad de la landing (4 etapas BQ)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Funnel de usabilidad de la landing</h2>", unsafe_allow_html=True)
