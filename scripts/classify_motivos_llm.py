@@ -51,6 +51,7 @@ CATEGORIES = [
     ("Cambio de vivienda",             False, "Más grande, otra zona, cambio de barrio dentro de la misma ciudad"),
     ("Viaje / vida fuera del país",    False, "Trasladarse al exterior, no conserva el inmueble"),
     ("Otro / no claro",                False, "Motivo ambiguo o sin información suficiente"),
+    ("Sin motivo cargado",             False, "El recepcionista no registró motivo de venta para este lead"),
 ]
 
 CATS_LABELS = [c[0] for c in CATEGORIES]
@@ -106,10 +107,9 @@ def main() -> None:
         sys.exit("OPENAI_API_KEY no está en env.")
 
     bq = bq_src._client()
-    print("Cargando nids del FakeDoor (ab_test_landing IN ('AH','BH')) con motivos...")
-    # Universo: deals con AH o BH = clientes que abrieron la landing y el JS
-    # les asignó variante. Es más confiable que el cruce con BQ events porque
-    # incluye nids cuyo Segment tracking falló pero sí abrieron.
+    print("Cargando nids del FakeDoor (ab_test_landing IN ('AH','BH'))...")
+    # Universo: TODOS los que abrieron landing (AH+BH). Los que tienen motivo
+    # van al LLM; los que no, quedan como "Sin motivo cargado" sin call API.
     sql = r"""
     WITH nids_landing AS (
       SELECT DISTINCT CAST(nid AS INT64) AS nid
@@ -124,28 +124,45 @@ def main() -> None:
       WHERE motivo_venta_string IS NOT NULL
       GROUP BY nid
     )
-    SELECT m.nid, m.motivo
-    FROM motivos m
-    INNER JOIN nids_landing l ON l.nid = m.nid
+    SELECT l.nid, m.motivo
+    FROM nids_landing l
+    LEFT JOIN motivos m ON l.nid = m.nid
     """
     df = bq.query(sql).to_dataframe()
-    print(f"  {len(df)} nids para clasificar")
+    df["motivo"] = df["motivo"].where(df["motivo"].notna(), None)
+    n_total = len(df)
+    n_con_motivo = int(df["motivo"].notna().sum())
+    n_sin_motivo = n_total - n_con_motivo
+    print(f"  {n_total} nids total · {n_con_motivo} con motivo · {n_sin_motivo} sin motivo")
 
     if df.empty:
         sys.exit("Sin nids para procesar.")
 
+    # Los sin motivo no van al LLM — quedan como "Sin motivo cargado"
+    sin_motivo_rows = [
+        {
+            "nid": int(row["nid"]),
+            "motivo_original": "",
+            "categoria_llm": "Sin motivo cargado",
+            "candidato_credito": False,
+            "razon_llm": "El recepcionista no registró motivo para este lead.",
+        }
+        for _, row in df[df["motivo"].isna()].iterrows()
+    ]
+
+    con_motivo = df[df["motivo"].notna()]
     client = OpenAI()
-    results = []
+    results = list(sin_motivo_rows)
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {
             pool.submit(_classify_one, client, int(row["nid"]), str(row["motivo"])): row
-            for _, row in df.iterrows()
+            for _, row in con_motivo.iterrows()
         }
         for i, fut in enumerate(as_completed(futures), 1):
             r = fut.result()
             results.append(r)
             if i % 5 == 0 or i == len(futures):
-                print(f"  {i}/{len(futures)}")
+                print(f"  LLM {i}/{len(futures)}")
 
     out = pd.DataFrame(results).sort_values("nid").reset_index(drop=True)
     OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
