@@ -655,11 +655,6 @@ else:
             ("cta_venta", "Click CTA venta", n_cta_venta, "cta_continuar_venta"),
             ("asesor", "Habló con asesor", n_asesor, "whatsapp / cta_asesor"),
         ]
-
-        # Drill-down vía query_params (URL ?kpi=<slug>). Click en card recarga
-        # la página con el slug y todas las secciones aguas abajo leen
-        # st.query_params para filtrarse.
-        active_kpi_slug = st.query_params.get("kpi", "")
         SLUG_TO_LABEL = {slug: label for slug, label, _, _ in KPI_EVENTS}
         SLUG_TO_EVENTS = {
             "entraron": ["page_view_landing"],
@@ -671,10 +666,15 @@ else:
             "cta_venta": ["cta_continuar_venta"],
             "asesor": ["cta_hablar_asesor", "whatsapp_click"],
         }
+
+        # Estado del filtro en session_state (no usa query_params, así el
+        # rerun es soft — Streamlit nativo, no full navigate).
+        if "kpi_filter_slug" not in st.session_state:
+            st.session_state["kpi_filter_slug"] = None
+        active_kpi_slug = st.session_state["kpi_filter_slug"]
         st.session_state["kpi_filter"] = SLUG_TO_LABEL.get(active_kpi_slug)
 
         # Calcular subset de UUIDs que dispararon el evento del filtro.
-        # Si no hay filtro activo, kpi_uuids_filter = None (= sin restricción).
         kpi_uuids_filter = None
         if active_kpi_slug in SLUG_TO_EVENTS and not df_tracks.empty:
             _target_events = SLUG_TO_EVENTS[active_kpi_slug]
@@ -684,58 +684,78 @@ else:
             kpi_uuids_filter = set(df_tracks.loc[_mask, "uuid"].dropna().astype(str).str.lower())
         st.session_state["kpi_uuids_filter"] = kpi_uuids_filter
 
-        # CSS de las cards-link (idéntico a .kcard pero con hover y estado activo)
+        # CSS para las cards: visual idéntica a kpi_card + el button pequeño
+        # debajo de cada card. Cuando la card está activa, se resalta.
         st.markdown(f"""
         <style>
-        .kcard-link {{ text-decoration: none !important; display: block; }}
-        .kcard-link .kcard {{
-            cursor: pointer;
-            transition: all 0.15s ease;
-            min-height: 88px;
-        }}
-        .kcard-link:hover .kcard {{
-            border-left-color: {ACCENT};
-            transform: translateY(-2px);
-            box-shadow: 0 4px 14px rgba(46,17,71,0.16);
-        }}
-        .kcard-link.active .kcard {{
+        .kcard-wrap {{ margin-bottom: 4px; }}
+        .kcard-wrap .kcard {{ min-height: 88px; }}
+        .kcard-wrap.active .kcard {{
             border-left: 4px solid {DEEP};
             outline: 2px solid {PRIMARY};
             outline-offset: -2px;
         }}
-        .kcard-link.active .kval {{ color: {DEEP}; }}
+        .kcard-wrap.active .kval {{ color: {DEEP}; }}
+        /* Botoncitos pequeños debajo de cada card */
+        section[data-testid="stMain"] div[data-testid="stButton"] > button {{
+            padding: 4px 12px !important;
+            min-height: 32px !important;
+            font-size: 0.78rem !important;
+            border-radius: 6px !important;
+            border: 1px solid {PALE} !important;
+            color: {PRIMARY} !important;
+            background: {WHITE} !important;
+            font-weight: 600 !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button:hover {{
+            border-color: {PRIMARY} !important;
+            background: {PALE} !important;
+        }}
+        section[data-testid="stMain"] div[data-testid="stButton"] > button[kind="primary"] {{
+            background: {PRIMARY} !important;
+            color: white !important;
+            border-color: {PRIMARY} !important;
+        }}
         </style>
         """, unsafe_allow_html=True)
 
-        def _kpi_link(slug, label, value, sub):
+        def _render_kpi(col, slug, label, value, sub):
             is_active = active_kpi_slug == slug
-            href = "?" if is_active else f"?kpi={slug}"
             active_cls = " active" if is_active else ""
-            return (
-                f'<a href="{href}" target="_self" class="kcard-link{active_cls}">'
-                f"<div class='kcard'>"
-                f"<div class='kval'>{value}</div>"
-                f"<div class='klbl'>{label}</div>"
-                f"<div class='ksub'>{sub}</div>"
-                f"</div></a>"
-            )
+            with col:
+                st.markdown(
+                    f"<div class='kcard-wrap{active_cls}'>"
+                    f"<div class='kcard'>"
+                    f"<div class='kval'>{value}</div>"
+                    f"<div class='klbl'>{label}</div>"
+                    f"<div class='ksub'>{sub}</div>"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                btn_label = "✕ Quitar filtro" if is_active else "Filtrar Desglose"
+                if st.button(
+                    btn_label, key=f"kpi_btn_{slug}",
+                    type="primary" if is_active else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["kpi_filter_slug"] = None if is_active else slug
+                    st.rerun()
 
         # Fila 1
         cols1 = st.columns(4)
         for col, (slug, lbl, val, sub) in zip(cols1, KPI_EVENTS[:4]):
-            col.markdown(_kpi_link(slug, lbl, val, sub), unsafe_allow_html=True)
+            _render_kpi(col, slug, lbl, val, sub)
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         # Fila 2
         cols2 = st.columns(4)
         for col, (slug, lbl, val, sub) in zip(cols2, KPI_EVENTS[4:]):
-            col.markdown(_kpi_link(slug, lbl, val, sub), unsafe_allow_html=True)
+            _render_kpi(col, slug, lbl, val, sub)
 
         if st.session_state.get("kpi_filter"):
             st.caption(
                 f"Filtro activo en TODAS las secciones de abajo: nids cuyos "
-                f"UUIDs dispararon **{st.session_state['kpi_filter']}**. "
-                "Click otra vez en la card para quitar el filtro."
+                f"UUIDs dispararon **{st.session_state['kpi_filter']}**."
             )
 
         # Aplicar el filtro de KPI a tracks_universe para las gráficas y la
