@@ -1673,59 +1673,127 @@ else:
 # Helper: mini-funnel 5 etapas para un subset de nids
 # Etapas: Segmentado → Abrió landing → T&C → Elegibles → Aplican (sin hipoteca)
 # ─────────────────────────────────────────────────────────────────────────────
-def _mini_funnel_fakedoor(nids_subset: set[int], titulo: str, color: str) -> go.Figure:
-    """Construye un mini-funnel para un subset de nids."""
-    n_segmentados = len(nids_subset)
-    # Abrió landing: tiene ab_test_landing en AH/BH
+# Paleta para diferenciar las categorías (no candidatas) en el funnel gris.
+_CATEGORY_PALETTE = {
+    "Cambio de vivienda":              "#7B2CBF",   # MED
+    "Quiere comprar otro inmueble":    "#9D4EDD",   # ACCENT
+    "Mudanza / cambio de ciudad":      "#06B6D4",   # cyan
+    "Separación / divorcio":           "#F59E0B",   # ámbar
+    "Cambio personal o familiar":      "#EF4444",   # rojo claro
+    "Viaje / vida fuera del país":     "#3B82F6",   # azul
+    "Otro / no claro":                 "#94A3B8",   # gris-azul
+    "Sin motivo cargado":              "#CBD5E1",   # gris muy claro
+}
+
+
+def _mini_funnel_fakedoor(
+    nids_subset: set[int], titulo: str, color: str,
+    nid_to_category: dict | None = None,
+) -> go.Figure:
+    """Mini-funnel para un subset de nids.
+
+    Si `nid_to_category` está, las etapas "T&C" y "Elegibles" se renderizan
+    como stacked bars con colores distintos por categoría (drill-down de
+    segmentación). El resto de etapas usan el color base.
+    """
+    # Pre-cálculo de los sets canónicos
     nids_landing = set(
         df_hs[df_hs.get("ab_test_landing", pd.Series(dtype=str)).isin(["AH", "BH"])]
         .get("nid", pd.Series(dtype=float)).dropna().astype(int).tolist()
     ) if not df_hs.empty else set()
-    n_abrio = len(nids_subset & nids_landing)
-    # T&C: aparece en df_leads (Sheet) → cruzar por uuid
-    leads_uuids = set(df_leads.get("uuid_str", pd.Series(dtype=str))
-                      .dropna().astype(str).str.lower()) if "uuid_str" in df_leads.columns else set()
-    if not leads_uuids and "telefono" in df_leads.columns:
-        # fallback: usar nid directo si está en df merged más abajo. Mejor cruzar
-        # nids via df_in (que ya tiene merge con HS).
-        pass
-    # Cruce más simple vía df_in: df_in tiene nid (de HS merge) y aplica
-    nids_tyc = set(df_in["nid"].dropna().astype(int).tolist()) if "nid" in df_in.columns else set()
-    n_tyc = len(nids_subset & nids_tyc)
-    # Elegibles = aplica="si"
-    nids_elegibles = set(
+    nids_tyc_all = set(df_in["nid"].dropna().astype(int).tolist()) if "nid" in df_in.columns else set()
+    nids_eleg_all = set(
         df_in.loc[df_in["aplica"].astype(str).str.lower() == "si", "nid"]
         .dropna().astype(int).tolist()
     ) if "aplica" in df_in.columns else set()
-    n_elegibles = len(nids_subset & nids_elegibles)
-    # Aplican = elegibles sin hipoteca
-    nids_aplican = set(
+    nids_aplican_all = set(
         df_in.loc[
             (df_in["aplica"].astype(str).str.lower() == "si")
             & (df_in.get("hipoteca_status", pd.Series(dtype=str)) == "No"),
             "nid",
         ].dropna().astype(int).tolist()
     ) if "aplica" in df_in.columns else set()
-    n_aplican = len(nids_subset & nids_aplican)
+
+    n_seg = len(nids_subset)
+    n_abrio = len(nids_subset & nids_landing)
+    n_tyc = len(nids_subset & nids_tyc_all)
+    n_eleg = len(nids_subset & nids_eleg_all)
+    n_apli = len(nids_subset & nids_aplican_all)
 
     labels = ["Segmentado", "Abrió landing", "T&C firmado", "Elegibles", "Aplican"]
-    vals = [n_segmentados, n_abrio, n_tyc, n_elegibles, n_aplican]
-    text = [
-        f"{v:,}" + (f" ({v/vals[0]*100:.0f}%)" if vals[0] > 0 and i > 0 else "")
-        for i, v in enumerate(vals)
-    ]
-    fig = go.Figure(go.Bar(
-        x=vals, y=labels, orientation="h",
-        marker_color=color, text=text,
-        textposition="outside", textfont=dict(size=11, color=DEEP),
-    ))
+    vals = [n_seg, n_abrio, n_tyc, n_eleg, n_apli]
+
+    fig = go.Figure()
+
+    if nid_to_category:
+        # Calcular breakdown por categoría para T&C y Elegibles
+        nids_tyc_subset = nids_subset & nids_tyc_all
+        nids_eleg_subset = nids_subset & nids_eleg_all
+        categorias = sorted(set(nid_to_category.values()))
+
+        # Trace base — etapas 1,2,5 con el color principal (T&C y Elegibles
+        # quedan como total con texto fuera)
+        # Para que se vea limpio: barras simples para Segmentado/AbrióLanding/Aplican,
+        # stacked solo para T&C y Elegibles.
+        # Estrategia: 1 trace por categoría para cada etapa stacked.
+        for cat in categorias:
+            cat_color = _CATEGORY_PALETTE.get(cat, "#9ca3af")
+            n_tyc_cat = sum(1 for n in nids_tyc_subset if nid_to_category.get(n) == cat)
+            n_eleg_cat = sum(1 for n in nids_eleg_subset if nid_to_category.get(n) == cat)
+            x_vals = [0, 0, n_tyc_cat, n_eleg_cat, 0]  # solo aporta a T&C y Elegibles
+            fig.add_trace(go.Bar(
+                name=cat,
+                x=x_vals, y=labels, orientation="h",
+                marker_color=cat_color,
+                hovertemplate=f"<b>{cat}</b><br>%{{y}}: %{{x}}<extra></extra>",
+                showlegend=True,
+            ))
+
+        # Trace overlay con los totales para Segmentado / AbrióLanding / Aplican
+        # y texto general por etapa
+        text = [
+            f"{v:,}" + (f" ({v/vals[0]*100:.0f}%)" if vals[0] > 0 and i > 0 else "")
+            for i, v in enumerate(vals)
+        ]
+        fig.add_trace(go.Bar(
+            name="Total",
+            x=[n_seg, n_abrio, 0, 0, n_apli],
+            y=labels, orientation="h",
+            marker_color=color,
+            text=text, textposition="outside", textfont=dict(size=11, color=DEEP),
+            showlegend=False,
+            hovertemplate="<b>Total</b><br>%{y}: %{x}<extra></extra>",
+        ))
+        # Texto sobre las barras stacked también
+        for i, v in enumerate(vals):
+            if i in (2, 3) and v > 0:
+                fig.add_annotation(
+                    x=v, y=labels[i], text=f"<b>{v:,} ({v/vals[0]*100:.0f}%)</b>",
+                    showarrow=False, xanchor="left", xshift=4,
+                    font=dict(size=11, color=DEEP),
+                )
+        fig.update_layout(barmode="stack")
+    else:
+        text = [
+            f"{v:,}" + (f" ({v/vals[0]*100:.0f}%)" if vals[0] > 0 and i > 0 else "")
+            for i, v in enumerate(vals)
+        ]
+        fig.add_trace(go.Bar(
+            x=vals, y=labels, orientation="h",
+            marker_color=color, text=text,
+            textposition="outside", textfont=dict(size=11, color=DEEP),
+            showlegend=False,
+        ))
+
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=11),
         title=dict(text=titulo, font=dict(size=12, color=DEEP)),
-        height=240, margin=dict(l=10, r=70, t=36, b=10),
+        height=280, margin=dict(l=10, r=120, t=36, b=10),
         xaxis=dict(gridcolor="#ede8f5", tickformat=",d"),
         yaxis=dict(autorange="reversed"),
+        legend=dict(font=dict(size=9), orientation="v", x=1.02, y=1,
+                    yanchor="top", xanchor="left"),
     )
     return fig
 
@@ -1741,6 +1809,11 @@ if _LLM_CSV.exists():
                             .dropna().astype(int).tolist())
     nids_no_cand_motivo = set(df_llm_full[df_llm_full["candidato_credito"] == False]["nid"]
                                .dropna().astype(int).tolist())
+    # Mapping nid → categoría (solo no-candidatos para colorear su breakdown)
+    nid_to_cat_motivo = {
+        int(r["nid"]): r["categoria_llm"]
+        for _, r in df_llm_full[df_llm_full["candidato_credito"] == False].iterrows()
+    }
     if nids_cand_motivo or nids_no_cand_motivo:
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown(
@@ -1756,7 +1829,10 @@ if _LLM_CSV.exists():
             )
         with col_b:
             st.plotly_chart(
-                _mini_funnel_fakedoor(nids_no_cand_motivo, "No candidatos (gris)", "#9ca3af"),
+                _mini_funnel_fakedoor(
+                    nids_no_cand_motivo, "No candidatos · breakdown por categoría",
+                    "#9ca3af", nid_to_category=nid_to_cat_motivo,
+                ),
                 use_container_width=True, key="funnel_motivo_no_cand",
             )
 
@@ -1834,8 +1910,8 @@ else:
         st.caption(
             "Verde = candidato al crédito (cliente quiere conservar el inmueble). "
             "Gris = no candidato. Clasificación con gpt-4o-mini sobre conversaciones "
-            "(WhatsApp + transcripciones de llamadas) de leads con "
-            "oportunidad ∈ {Cierre, No interesado, Rechazó oferta}."
+            "(WhatsApp + transcripciones de llamadas) de todos los leads del FakeDoor "
+            "(AH/BH) que tienen al menos una conversación."
         )
 
         # Mini-funnels candidato vs no candidato (mismo formato que motivo arriba)
@@ -1843,6 +1919,10 @@ else:
                               .dropna().astype(int).tolist())
         nids_no_cand_conv = set(df_conv_f[df_conv_f["candidato_credito"] == False]["nid"]
                                  .dropna().astype(int).tolist())
+        nid_to_cat_conv = {
+            int(r["nid"]): r["categoria_llm"]
+            for _, r in df_conv_f[df_conv_f["candidato_credito"] == False].iterrows()
+        }
         if nids_cand_conv or nids_no_cand_conv:
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
             st.markdown(
@@ -1858,7 +1938,10 @@ else:
                 )
             with col_d:
                 st.plotly_chart(
-                    _mini_funnel_fakedoor(nids_no_cand_conv, "No candidatos (gris)", "#9ca3af"),
+                    _mini_funnel_fakedoor(
+                        nids_no_cand_conv, "No candidatos · breakdown por categoría",
+                        "#9ca3af", nid_to_category=nid_to_cat_conv,
+                    ),
                     use_container_width=True, key="funnel_conv_no_cand",
                 )
 
