@@ -142,9 +142,11 @@ def main() -> None:
 
     bq = bq_src._client()
     print("Cargando conversaciones del FakeDoor con la query del usuario...")
+    # Universo: nids del FakeDoor (AH/BH) que tengan conversación (WA o llamada),
+    # sin filtrar por oportunidad_del_negocio (= todo el universo del experimento).
     sql = r"""
     WITH llamadas_efectivas AS (
-      SELECT CAST(nid AS INT64) AS nid, transcribed_at, transcription, call_duration_seconds
+      SELECT CAST(nid AS INT64) AS nid, transcribed_at, transcription
       FROM `sellers-main-prod.hubspot.enriched_transcriptions`
       WHERE call_duration_seconds > 30 AND nid IS NOT NULL
         AND transcription IS NOT NULL
@@ -154,37 +156,23 @@ def main() -> None:
       FROM `sellers-main-prod.hubspot.whatsapp_messages`
       WHERE nid IS NOT NULL AND message IS NOT NULL
     ),
-    inmuebles_filtrados AS (
-      SELECT CAST(nid AS INT64) AS nid
-      FROM `papyrus-data.habi_wh_bi.tabla_inmuebles_general`
-      WHERE nid IS NOT NULL
-        AND oportunidad_del_negocio IN (
-          "Cierre - Comprado","No interesado",
-          "Rechazó oferta - No volver a llamar","Rechazó Oferta"
-        )
-    ),
     fakedoor AS (
       SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
       WHERE ab_test_landing IN ('AH','BH') AND nid IS NOT NULL
     ),
     contactos AS (
-      SELECT iw.nid, 'M' AS t, mw.message AS contenido, mw.timestamp_message AS f
-      FROM inmuebles_filtrados iw JOIN mensajes_whatsapp mw ON iw.nid = mw.nid
+      SELECT fd.nid, 'M' AS t, mw.message AS contenido, mw.timestamp_message AS f
+      FROM fakedoor fd JOIN mensajes_whatsapp mw ON fd.nid = mw.nid
       UNION ALL
-      SELECT iw.nid, 'L' AS t, le.transcription AS contenido, le.transcribed_at AS f
-      FROM inmuebles_filtrados iw JOIN llamadas_efectivas le ON iw.nid = le.nid
-    ),
-    agg AS (
-      SELECT nid,
-             STRING_AGG(CONCAT(t, ': ', contenido), '\n' ORDER BY f) AS conv
-      FROM contactos
-      WHERE contenido IS NOT NULL
-      GROUP BY nid
+      SELECT fd.nid, 'L' AS t, le.transcription AS contenido, le.transcribed_at AS f
+      FROM fakedoor fd JOIN llamadas_efectivas le ON fd.nid = le.nid
     )
-    SELECT a.nid, a.conv
-    FROM agg a
-    INNER JOIN fakedoor f ON f.nid = a.nid
+    SELECT nid,
+           STRING_AGG(CONCAT(t, ': ', contenido), '\n' ORDER BY f) AS conv
+    FROM contactos
+    WHERE contenido IS NOT NULL
+    GROUP BY nid
     """
     df = bq.query(sql).to_dataframe()
     print(f"  {len(df)} nids para clasificar (FakeDoor ∩ query usuario)")
