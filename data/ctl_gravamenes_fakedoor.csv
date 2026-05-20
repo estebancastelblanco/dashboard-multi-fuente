@@ -1,0 +1,253 @@
+nid,ctl_id,anotaciones_raw,error,tiene_hipoteca,tiene_leasing,tiene_patrimonio_familia,aplica
+5068063289,211120171292,Regimen de propiedad horizontal | Afectacion a vivienda familiar,,False,False,False,True
+7495878215,212039155611,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+8616533688,211389008714,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+12558176356,212742856800,Regimen de propiedad horizontal | Servidumbre | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+13602322029,212897569870,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+16165864793,212480216617,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+16430218675,212831977829,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+16878498445,195836321872,Regimen de propiedad horizontal | Servidumbre | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+17341106235,208387079943,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Derecho de preferencia | Prohibicion de transferencia,,True,False,True,False
+20106301090,212673232272,Hipoteca | Regimen de propiedad horizontal | Afectacion a vivienda familiar,,True,False,False,False
+21210909105,193814075687,,extract_error: Invalid or unreadable PDF document,,,,False
+22944713223,200332982542,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+29037454132,212906551393,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+29724649770,208573936427,,extract_error: Invalid or unreadable PDF document,,,,False
+32032595211,211825670448,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+33630811945,212542533227,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+34142871348,191820282475,Regimen de propiedad horizontal | Sucesion | Hipoteca,,True,False,False,False
+34485083049,212029542672,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+35771071537,211264146212,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+36294872503,191542912938,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+36649172016,212882627993,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia | Embargo,,True,False,True,False
+37528939181,190640613703,,extract_error: Invalid or unreadable PDF document,,,,False
+37995147392,212113625406,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+38314612526,206649401370,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+38612439111,206991825472,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+39019748632,191780656777,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+39501458451,193131079174,Regimen de propiedad horizontal | Servidumbre,,False,False,False,True
+39609820694,192667124810,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+39708643716,198061789225,Regimen de propiedad horizontal | Servidumbre,,False,False,False,True
+39765575811,202515122740,Regimen de propiedad horizontal | Embargo,,False,False,False,True
+41361608982,206331864868,Regimen de propiedad horizontal,,False,False,False,True
+42900616448,195244798298,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+43385380615,196488205950,Servidumbre | Regimen de propiedad horizontal | Sucesion | Hipoteca,,True,False,False,False
+43631522817,212906126960,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+44780461890,199122212162,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+44870825067,206419812261,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+44930136954,196843059264,Regimen de propiedad horizontal,,False,False,False,True
+45038465646,196913141253;197944164007,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+45281505548,197698647659,Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar,,True,False,False,False
+45421608032,198057877637,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+46631019101,212243762287,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+47271666524,198703958381,Regimen de propiedad horizontal | Servidumbre | Hipoteca,,True,False,False,False
+48136402504,199529903731,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+48474639903,212029358142,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+48552349711,199693139241,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+48779011512,199992167453,Regimen de propiedad horizontal | Leasing,,False,True,False,False
+48954164914,200342677415,Regimen de propiedad horizontal | Servidumbre | Hipoteca | Patrimonio de familia,,True,False,True,False
+50314460820,201438293829,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+50880639381,201579990183,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+51089323884,209406084924,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+51116981036,204468643841,Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar,,True,False,False,False
+51302217791,202353387106,Hipoteca | Patrimonio de familia,,True,False,True,False
+51507337832,203452641391,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+51516436138,211176485483,Regimen de propiedad horizontal,,False,False,False,True
+51698467903,207998724384,Regimen de propiedad horizontal,,False,False,False,True
+52005700419,203822083079,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+52061014652,205067417392,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+52062631976,203574027662,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+52268581794,211417881159,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+52387335495,212542570289,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia | Hipoteca,,True,False,True,False
+52834831432,208996408407,Regimen de propiedad horizontal | Patrimonio de familia | Afectacion a vivienda familiar,,False,False,True,False
+52842884131,207733698347,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+53091208860,204636996204,Regimen de propiedad horizontal | Hipoteca | Derecho de preferencia | Patrimonio de familia | Plusvalia,,True,False,True,False
+53181019057,210766199089,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+53266009959,205331242313,Regimen de propiedad horizontal | Servidumbre | Patrimonio de familia,,False,False,True,False
+53267946934,204364938396,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+53380711319,207224066569,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+53405491254,205683537448,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+53564493918,205468092002,Servidumbre | Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+53568018831,205757419163,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+53762834840,205461981107;205683409505,,extract_error: Invalid or unreadable PDF document,,,,False
+53855430725,212227213642,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia,,False,False,True,False
+54109062467,207527978895,Regimen de propiedad horizontal | Leasing,,False,True,False,False
+54116235686,207281765733,Regimen de propiedad horizontal,,False,False,False,True
+54116387718,207527944097,Regimen de propiedad horizontal,,False,False,False,True
+54327021988,207482580888,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+54363201674,207172571704,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+54426435406,206246692232,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+54426453805,212470551623,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+54460421018,211415065344,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+54604989366,208331668481,Servidumbre | Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+54620289809,206217169711,Regimen de propiedad horizontal,,False,False,False,True
+54770831198,212692140401,Regimen de propiedad horizontal,,False,False,False,True
+55044936960,208192665217,Servidumbre | Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+55076663885,207187266121,Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar | Embargo,,True,False,False,False
+55207742473,206786024040,Hipoteca | Regimen de propiedad horizontal | Afectacion a vivienda familiar | Patrimonio de familia,,True,False,True,False
+55214028054,212329427726,Regimen de propiedad horizontal,,False,False,False,True
+55215640185,206492803101,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+55297500939,210781874791,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+55305994895,208787732509,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+55371768576,212668750242,Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar | Embargo,,True,False,False,False
+55462252121,207101091441,Servidumbre | Regimen de propiedad horizontal,,False,False,False,True
+55473940664,206964722793,Regimen de propiedad horizontal | Hipoteca | Servidumbre,,True,False,False,False
+55481599267,207371310243,Regimen de propiedad horizontal,,False,False,False,True
+55519053486,212822290302,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Hipoteca | Patrimonio de familia | Embargo,,True,False,True,False
+55563231866,212234392067,Regimen de propiedad horizontal | Embargo,,False,False,False,True
+55577119513,207472732034,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+55624635276,207548964690,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+55624742526,207931848200,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+55677133083,207211587491,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+55684270945,207393823243,Regimen de propiedad horizontal | Afectacion a vivienda familiar,,False,False,False,True
+55693710148,208257529247,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+55696016755,208665927487,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+55714585127,211264423608,Regimen de propiedad horizontal,,False,False,False,True
+55724343208,209379477619,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+55939565750,212317260155,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+55946679217,208307689142,Servidumbre | Regimen de propiedad horizontal | Hipoteca | Leasing,,True,True,False,False
+56015482801,210084516727,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56028061804,211410792752,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+56039579688,207982949301,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+56042502178,210285058862,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+56134493364,209888885008,Regimen de propiedad horizontal,,False,False,False,True
+56186096532,211471787812,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+56250683676,208049289478,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56273923957,208238645283,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56279226113,211795185806,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+56281384628,207931752993,Regimen de propiedad horizontal,,False,False,False,True
+56291778888,208069120156,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56294769193,212542831258,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+56341564295,207973201166,,extract_error: Invalid or unreadable PDF document,,,,False
+56422777898,207821098270,Regimen de propiedad horizontal | Leasing,,False,True,False,False
+56476069284,207842205346;208074075026,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+56497311751,209864057133,Regimen de propiedad horizontal | Hipoteca | Embargo,,True,False,False,False
+56499541078,207999037367,Servidumbre | Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56555490973,208074041114,Regimen de propiedad horizontal,,False,False,False,True
+56594981801,207988751904,Servidumbre | Hipoteca,,True,False,False,False
+56601763380,211825400097,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56647583389,208390270894,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+56710234253,211044297474,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+56895215177,208398397278,Hipoteca | Patrimonio de familia,,True,False,True,False
+56948217187,208665736617,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+56984214274,208327356165,Regimen de propiedad horizontal,,False,False,False,True
+57216644003,209115413375,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57307058326,211520637987,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57313187356,211133945982,Servidumbre | Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+57345433929,211946178735,Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar,,True,False,False,False
+57372734636,210214990358,Servidumbre | Regimen de propiedad horizontal | Hipoteca | Afectacion a vivienda familiar,,True,False,False,False
+57485514861,210577232512,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57493988418,208841620918,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+57590015499,209408434873,Regimen de propiedad horizontal,,False,False,False,True
+57597344902,210219741343,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57816811564,209119171918,,extract_error: Invalid or unreadable PDF document,,,,False
+57832625813,209183046766,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57835243857,211816223232,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+57840828600,209945173137,Regimen de propiedad horizontal | Afectacion a vivienda familiar,,False,False,False,True
+57863591311,212742821249,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+57882548650,213208575002,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+57900438127,209246497686,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+57908521476,209241967659,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57912517546,209128234251,Servidumbre | Regimen de propiedad horizontal,,False,False,False,True
+57941662238,212109717813,Regimen de propiedad horizontal | Servidumbre | Sucesion | Hipoteca,,True,False,False,False
+57945160533,209194698327,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+57946214489,209864493592,Regimen de propiedad horizontal | Leasing,,False,True,False,False
+57955893511,212309888827,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+57958967184,211233470732,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+57971121169,212696966826,Regimen de propiedad horizontal | Sucesion | Leasing,,False,True,False,False
+57981509274,211185211316,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58008167301,212692245086,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58011894416,212673530487,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+58014587166,210658605965,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Hipoteca | Patrimonio de familia,,True,False,True,False
+58034942118,209930176585,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+58051474479,212480125878,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+58153569133,211881747288,Servidumbre | Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58181883021,210782027597,Regimen de propiedad horizontal | Sucesion,,False,False,False,True
+58221873942,209705429518,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+58247230023,209800541953,,extract_error: Invalid or unreadable PDF document,,,,False
+58249056885,211958533681,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58276960908,211524083356,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+58322414363,210224038297,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58322892414,212822490970,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+58325375772,209875350846,,extract_error: Invalid or unreadable PDF document,,,,False
+58333142834,212452907921,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58338581895,211682109525,Regimen de propiedad horizontal | Leasing,,False,True,False,False
+58367512456,210981704468,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia | Embargo,,True,False,True,False
+58430077445,211954115675,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58519971229,210888113766,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+58527772447,212822682544,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58541975179,210215059321,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58553551174,210655480136,Regimen de propiedad horizontal | Hipoteca | Condicion resolutoria,,True,False,False,False
+58559188288,211682338437,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Hipoteca | Patrimonio de familia,,True,False,True,False
+58611295155,211825392946,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+58632957194,210298467911,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+58837062564,210620745291,,extract_error: Invalid or unreadable PDF document,,,,False
+58879662103,210699847689,Regimen de propiedad horizontal | Derecho de preferencia | Prohibicion de transferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+58885216076,210981864264,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+58898356080,210662074457,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+58937065395,211867798623,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+58945510463,212751794279,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+58961651614,211105007201,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+59035560778,210836773997,Regimen de propiedad horizontal,,False,False,False,True
+59083324770,211798510430,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59089123421,211101901718,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+59094337119,210840501899,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59104180572,211039196760,,extract_error: Invalid or unreadable PDF document,,,,False
+59120665349,211168724343,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+59129176605,211539849096,Regimen de propiedad horizontal | Prohibicion de transferencia | Derecho de preferencia | Patrimonio de familia | Hipoteca,,True,False,True,False
+59130866031,212243276367,Regimen de propiedad horizontal | Sucesion,,False,False,False,True
+59138073984,211191160688,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+59146118928,211401909404,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+59147752065,211520661783,Servidumbre | Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+59151175737,211527937643;211531592105,Regimen de propiedad horizontal,,False,False,False,True
+59156030020,212831663504,Regimen de propiedad horizontal,,False,False,False,True
+59169457337,211808019037,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+59169558867,211462958113,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Afectacion a vivienda familiar | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+59172401497,211867729577,Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia | Valorizacion,,True,False,True,False
+59216209833,211180658010,Regimen de propiedad horizontal,,False,False,False,True
+59227091222,211471536952,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+59228623694,211686823524,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59235395910,211194073776,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59246737322,211539937038,Servidumbre | Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+59278859596,211401729386,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+59317229989,211871747393,Regimen de propiedad horizontal,,False,False,False,True
+59332197948,211526741148,Servidumbre | Regimen de propiedad horizontal,,False,False,False,True
+59367002768,211411485315,,extract_error: Invalid or unreadable PDF document,,,,False
+59374885426,211417481098,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59394245014,212113581902,Regimen de propiedad horizontal,,False,False,False,True
+59426847616,211946080898,Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+59438332161,212022560826,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+59456939936,212542684462,Regimen de propiedad horizontal,,False,False,False,True
+59458178429,211871686306,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59474638976,211958150242,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+59480411717,211808027319,Regimen de propiedad horizontal,,False,False,False,True
+59480873135,211871644500,Regimen de propiedad horizontal | Servidumbre,,False,False,False,True
+59510422570,212113645363,Regimen de propiedad horizontal,,False,False,False,True
+59532881321,212029548091,Servidumbre | Hipoteca | Regimen de propiedad horizontal | Patrimonio de familia,,True,False,True,False
+59562406983,211968487187,Servidumbre | Hipoteca | Regimen de propiedad horizontal,,True,False,False,False
+59563180831,212113620273,Regimen de propiedad horizontal,,False,False,False,True
+59575731620,211806556486,Servidumbre | Regimen de propiedad horizontal | Patrimonio de familia | Derecho de preferencia | Prohibicion de transferencia,,False,False,True,False
+59577146205,212530258243,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59672785174,212470447906,Regimen de propiedad horizontal | Condicion resolutoria | Hipoteca,,True,False,False,False
+59690743361,212831824962,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59694761280,212243759996,Regimen de propiedad horizontal | Patrimonio de familia,,False,False,True,False
+59726088013,211881110323,Regimen de propiedad horizontal | Sucesion | Hipoteca,,True,False,False,False
+59755544487,212227252318,Regimen de propiedad horizontal | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,False,False,True,False
+59763008821,211972534709,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+59773695087,211958605635,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia | Prohibicion de transferencia | Derecho de preferencia,,True,False,True,False
+59802668366,212227251460,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+59838304920,212038749867,Regimen de propiedad horizontal,,False,False,False,True
+59841966601,212761114205,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+59948821549,212822538522,Regimen de propiedad horizontal,,False,False,False,True
+59959666031,212227194504,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+59960404016,212224032032,Regimen de propiedad horizontal,,False,False,False,True
+59977971975,212186653357,Regimen de propiedad horizontal | Afectacion a vivienda familiar,,False,False,False,True
+59992161636,212175255965,Regimen de propiedad horizontal | Patrimonio de familia | Hipoteca,,True,False,True,False
+60013399809,212735536436,Regimen de propiedad horizontal,,False,False,False,True
+60013762586,212252670605,Regimen de propiedad horizontal,,False,False,False,True
+60052775850,212390710157,Regimen de propiedad horizontal | Hipoteca,,True,False,False,False
+60060851998,212695043488,Regimen de propiedad horizontal,,False,False,False,True
+60144317527,212534462084,Regimen de propiedad horizontal | Pacto de retroventa | Hipoteca,,True,False,False,False
+60175006747,212751398524,Regimen de propiedad horizontal,,False,False,False,True
+60185322001,212910975339,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False
+60187622739,212831770951,Regimen de propiedad horizontal | Hipoteca | Patrimonio de familia,,True,False,True,False

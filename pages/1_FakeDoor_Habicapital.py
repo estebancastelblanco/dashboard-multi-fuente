@@ -407,7 +407,8 @@ def load_experian_recent_scores(months: int = 3) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=DAY, show_spinner="CSV · edades escriturados 2026…", persist="disk")
-def load_escriturados_age_score() -> pd.DataFrame:
+def load_escriturados_age_score_v2() -> pd.DataFrame:
+    """v2: incluye Inmobiliaria (renombrado para invalidar cache disk)."""
     if not ESCRITURADOS_AGE_SCORE_PATH.exists():
         return pd.DataFrame(columns=["producto", "nid", "edad", "score_crediticio"])
     df = pd.read_csv(ESCRITURADOS_AGE_SCORE_PATH)
@@ -416,6 +417,10 @@ def load_escriturados_age_score() -> pd.DataFrame:
     if "score_crediticio" in df.columns:
         df["score_crediticio"] = pd.to_numeric(df["score_crediticio"], errors="coerce")
     return df.dropna(subset=["edad", "score_crediticio"]).copy()
+
+
+# Alias retro-compat
+load_escriturados_age_score = load_escriturados_age_score_v2
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · desglose crediticio sellers…", persist="disk")
@@ -1224,26 +1229,30 @@ else:
                 elif PERIODO_2026:
                     age_df = df_escriturados_age.copy()
                     product_order_age = [p for p in product_order if p in set(age_df["producto"].astype(str))]
-                    n_above_720 = int((age_df["score_crediticio"] >= 720).sum())
-                    pct_above_720 = (n_above_720 / len(age_df) * 100) if len(age_df) else 0.0
-                    k1, k2, k3, k4 = st.columns(4)
-                    k1.markdown(kpi_card("Personas", int(len(age_df)), "edad + score"), unsafe_allow_html=True)
-                    k2.markdown(kpi_card("Edad promedio", f"{age_df['edad'].mean():.1f}", "años"), unsafe_allow_html=True)
-                    k3.markdown(kpi_card("Score promedio", f"{age_df['score_crediticio'].mean():.0f}", "Experian"), unsafe_allow_html=True)
-                    k4.markdown(kpi_card("Score ≥ 720", n_above_720, f"{pct_above_720:.1f}% del universo"), unsafe_allow_html=True)
 
-                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-                    # Selector de producto (radio horizontal con Todos + 3 productos)
+                    # Selector de producto ARRIBA de los KPIs para que se filtren también
                     prod_opts = ["Todos"] + product_order_age
                     sel_prod = st.radio(
                         "Producto",
                         prod_opts, horizontal=True, index=0,
                         key="age_vs_score_prod",
-                        help="Filtra el scatter y la matriz por producto. "
+                        help="Filtra TODOS los KPIs, scatter y matriz por producto. "
                              "Verde = score ≥ 720 (elegible), rojo = score < 720.",
                     )
                     age_view = age_df.copy() if sel_prod == "Todos" else age_df[age_df["producto"] == sel_prod].copy()
+
+                    # KPIs ahora se calculan sobre age_view (filtrado por producto)
+                    n_above_720 = int((age_view["score_crediticio"] >= 720).sum())
+                    pct_above_720 = (n_above_720 / len(age_view) * 100) if len(age_view) else 0.0
+                    edad_avg = age_view["edad"].mean() if not age_view.empty else 0
+                    score_avg = age_view["score_crediticio"].mean() if not age_view.empty else 0
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.markdown(kpi_card("Personas", int(len(age_view)), f"edad + score · {sel_prod}"), unsafe_allow_html=True)
+                    k2.markdown(kpi_card("Edad promedio", f"{edad_avg:.1f}", "años"), unsafe_allow_html=True)
+                    k3.markdown(kpi_card("Score promedio", f"{score_avg:.0f}", "Experian"), unsafe_allow_html=True)
+                    k4.markdown(kpi_card("Score ≥ 720", n_above_720, f"{pct_above_720:.1f}% del subset"), unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
                     # Bucketizar edades en rangos de 10 años (20s, 30s, ..., 70+)
                     age_bins = [20, 30, 40, 50, 60, 70, 200]
@@ -1258,20 +1267,6 @@ else:
                     age_df["banda_score"] = age_df["score_crediticio"].apply(
                         lambda s: "Sin vida (0)" if s == 0
                         else ("≥720 (elegible)" if s >= 720 else "<720")
-                    )
-
-                    # KPIs del subset filtrado por producto
-                    n_view = len(age_view)
-                    n_elig = int((age_view["score_crediticio"] >= 720).sum())
-                    n_no_elig = n_view - n_elig
-                    pct_elig = n_elig / n_view * 100 if n_view else 0
-                    st.markdown(
-                        f"<div style='color:{MED};font-size:0.85rem;margin-bottom:8px'>"
-                        f"<b>{sel_prod}</b> · {n_view} personas · "
-                        f"<span style='color:{GREEN_DARK}'>{n_elig} elegibles ≥720 ({pct_elig:.0f}%)</span> · "
-                        f"<span style='color:{RED}'>{n_no_elig} no elegibles</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
                     )
 
                     corr_left, corr_right = st.columns(2)
@@ -2340,6 +2335,143 @@ else:
         })
     )
     st.dataframe(detalle, hide_index=True, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Aplicables (CTL — gravámenes extraídos del Certificado de Tradición y Libertad)
+# CSV pre-generado por scripts/process_ctl_gravamenes.py
+# Detecta hipoteca / leasing / patrimonio de familia en el CTL del inmueble.
+# Aplica = ninguno de los 3 → el inmueble puede usarse como garantía.
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Aplicables · gravámenes del CTL</h2>", unsafe_allow_html=True)
+
+_CTL_CSV = REPO_ROOT / "data" / "ctl_gravamenes_fakedoor.csv"
+if not _CTL_CSV.exists():
+    st.info("Aún no hay CSV de gravámenes CTL. Corre scripts/process_ctl_gravamenes.py.")
+else:
+    df_ctl = pd.read_csv(_CTL_CSV)
+    df_ctl["nid"] = pd.to_numeric(df_ctl["nid"], errors="coerce")
+
+    # Cruzar con HubSpot para traer fuente (= equivalente de "producto" del FakeDoor)
+    if not df_hs.empty and "nid" in df_hs.columns and "fuente" in df_hs.columns:
+        df_ctl = df_ctl.merge(
+            df_hs[["nid", "fuente"]].drop_duplicates("nid"),
+            on="nid", how="left",
+        )
+    else:
+        df_ctl["fuente"] = "(sin fuente)"
+    df_ctl["fuente"] = df_ctl["fuente"].fillna("(sin fuente)")
+
+    # Selector de fuente (= "producto" del FakeDoor)
+    fuente_opts = ["Todos"] + sorted(df_ctl["fuente"].dropna().astype(str).unique().tolist())
+    sel_fuente_ctl = st.radio(
+        "Fuente del cliente",
+        fuente_opts, horizontal=True, index=0,
+        key="ctl_fuente",
+        help="Filtra los KPIs y gráficos por fuente del cliente (Top / MM+Inmo / Rechazos).",
+    )
+    df_ctl_view = df_ctl if sel_fuente_ctl == "Todos" else df_ctl[df_ctl["fuente"] == sel_fuente_ctl]
+
+    # KPIs
+    n_total = len(df_ctl_view)
+    n_errores = int((df_ctl_view["error"].astype(str) != "").sum() if "error" in df_ctl_view.columns else 0)
+    n_validos = n_total - n_errores
+    n_aplican = int(df_ctl_view["aplica"].fillna(False).astype(bool).sum())
+    n_no_aplican = n_validos - n_aplican
+    pct_aplica = (n_aplican / n_validos * 100) if n_validos else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(kpi_card("CTL procesados", n_total, f"{sel_fuente_ctl}"),
+                unsafe_allow_html=True)
+    c2.markdown(kpi_card("Aplican (sin gravamen)",
+                         f"{n_aplican} ({pct_aplica:.0f}%)",
+                         "libre de hipoteca/leasing/patrimonio"),
+                unsafe_allow_html=True)
+    c3.markdown(kpi_card("No aplican", f"{n_no_aplican}",
+                         "con gravamen — no toman el crédito"),
+                unsafe_allow_html=True)
+    c4.markdown(kpi_card("Errores CTL", n_errores, "PDF inválido / no descargable"),
+                unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+    # Bar horizontal de gravámenes más comunes
+    grav_cols = ["tiene_hipoteca", "tiene_leasing", "tiene_patrimonio_familia"]
+    grav_labels = {
+        "tiene_hipoteca": "Hipoteca",
+        "tiene_leasing": "Leasing",
+        "tiene_patrimonio_familia": "Patrimonio de familia",
+    }
+    grav_counts = []
+    for c in grav_cols:
+        n = int(df_ctl_view[c].fillna(False).astype(bool).sum())
+        grav_counts.append({"Gravamen": grav_labels[c], "Con gravamen": n})
+    g_df = pd.DataFrame(grav_counts).sort_values("Con gravamen", ascending=True)
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        fig_grav = go.Figure(go.Bar(
+            x=g_df["Con gravamen"], y=g_df["Gravamen"], orientation="h",
+            marker_color=[RED, "#F59E0B", MED],
+            text=g_df["Con gravamen"], textposition="outside",
+        ))
+        fig_grav.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            title=dict(text=f"Gravámenes detectados · {sel_fuente_ctl}",
+                       font=dict(size=13, color=DEEP)),
+            height=300, margin=dict(l=10, r=60, t=44, b=10),
+            xaxis=dict(title="N° de CTLs con gravamen", gridcolor="#ede8f5"),
+            yaxis=dict(gridcolor="#ede8f5"),
+        )
+        st.plotly_chart(fig_grav, use_container_width=True, key="ctl_grav_bar")
+
+    with col_right:
+        # Desglose Aplica/No aplica por fuente
+        fuente_summary = (
+            df_ctl[df_ctl["error"].astype(str) == ""].assign(
+                estado=lambda d: d["aplica"].fillna(False).astype(bool).map(
+                    {True: "Aplica", False: "No aplica"}
+                )
+            )
+            .groupby(["fuente", "estado"])
+            .size().reset_index(name="N")
+        )
+        fig_src = go.Figure()
+        for estado, color in [("Aplica", GREEN_DARK), ("No aplica", "#9ca3af")]:
+            sub = fuente_summary[fuente_summary["estado"] == estado]
+            fig_src.add_trace(go.Bar(
+                name=estado, x=sub["fuente"], y=sub["N"],
+                marker_color=color, text=sub["N"], textposition="inside",
+            ))
+        fig_src.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            title=dict(text="Aplican vs No aplican por fuente",
+                       font=dict(size=13, color=DEEP)),
+            barmode="stack", height=300, margin=dict(l=10, r=10, t=44, b=10),
+            xaxis=dict(title="Fuente", gridcolor="#ede8f5"),
+            yaxis=dict(title="CTLs", gridcolor="#ede8f5"),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0),
+        )
+        st.plotly_chart(fig_src, use_container_width=True, key="ctl_fuente_bar")
+
+    with st.expander("Detalle por nid · CTL + gravámenes", expanded=False):
+        cols_view = ["nid", "fuente", "tiene_hipoteca", "tiene_leasing",
+                     "tiene_patrimonio_familia", "aplica", "anotaciones_raw", "error"]
+        cols_view = [c for c in cols_view if c in df_ctl_view.columns]
+        st.dataframe(
+            df_ctl_view[cols_view].rename(columns={
+                "nid": "NID", "fuente": "Fuente",
+                "tiene_hipoteca": "Hipoteca",
+                "tiene_leasing": "Leasing",
+                "tiene_patrimonio_familia": "Patrimonio fam.",
+                "aplica": "Aplica",
+                "anotaciones_raw": "Anotaciones (raw)",
+                "error": "Error",
+            }),
+            hide_index=True, use_container_width=True,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

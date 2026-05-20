@@ -29,3 +29,6 @@ data/escriturados_2026_extracted_cache.csv
 # Snapshots locales de HubSpot (PII: nombres, teléfonos, cédulas en deals)
 data/hs_deals_snapshot.parquet
 data/hs_property_labels.parquet
+
+# Repo del lector CTL (código de terceros, no se versiona aquí)
+scripts/ctl-reader-service-main/
