@@ -1487,9 +1487,9 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Categorías cliente
+# Categorías cliente Gabi (motivo_venta_string crudo de recepcionista)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Categorías cliente</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Categorías cliente Gabi</h2>", unsafe_allow_html=True)
 
 if df_hs_f.empty or "nid" not in df_hs_f.columns:
     st.info("No hay deals con `nid` disponible para construir categorías.")
@@ -1563,6 +1563,106 @@ else:
                     f"{int(df_cat['nid'].nunique())} nids en "
                     "`seller_digital_co_recepcionista_mm`."
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Categorías cliente LLM (motivos clasificados con OpenAI)
+# CSV pre-generado: data/categorias_llm_fakedoor.csv
+# Categoría + flag candidato al crédito de libre inversión (= no quiere
+# deshacerse del inmueble, solo necesita liquidez).
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Categorías cliente LLM</h2>", unsafe_allow_html=True)
+
+_LLM_CSV = REPO_ROOT / "data" / "categorias_llm_fakedoor.csv"
+if not _LLM_CSV.exists():
+    st.info("Aún no hay clasificación LLM. Corre scripts/classify_motivos_llm.py.")
+else:
+    df_llm = pd.read_csv(_LLM_CSV)
+    df_llm["nid"] = pd.to_numeric(df_llm["nid"], errors="coerce")
+
+    # Filtrar a nids visibles según filtros del sidebar
+    if not df_hs_f.empty and "nid" in df_hs_f.columns:
+        nids_visibles_llm = set(df_hs_f["nid"].dropna().astype(int).tolist())
+        df_llm_f = df_llm[df_llm["nid"].isin(nids_visibles_llm)].copy()
+    else:
+        df_llm_f = df_llm.copy()
+
+    if df_llm_f.empty:
+        st.info("Ningún nid del LLM cruza con los filtros actuales del sidebar.")
+    else:
+        n_total = len(df_llm_f)
+        n_cand = int(df_llm_f["candidato_credito"].sum())
+        n_no_cand = n_total - n_cand
+
+        # KPIs arriba
+        cl1, cl2, cl3 = st.columns(3)
+        cl1.markdown(kpi_card("Leads clasificados", n_total,
+                              "que abrieron landing fakedoor"),
+                     unsafe_allow_html=True)
+        cl2.markdown(kpi_card("Candidatos al crédito", f"{n_cand} ({n_cand/n_total*100:.0f}%)",
+                              "querían conservar el inmueble"),
+                     unsafe_allow_html=True)
+        cl3.markdown(kpi_card("No candidatos", f"{n_no_cand} ({n_no_cand/n_total*100:.0f}%)",
+                              "necesitaban vender el inmueble"),
+                     unsafe_allow_html=True)
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+        # Bar chart: categoría con color verde si es candidato, gris si no
+        cat_summary = (
+            df_llm_f.groupby(["categoria_llm", "candidato_credito"])
+            .size().reset_index(name="N")
+        )
+        cat_order = cat_summary.groupby("categoria_llm")["N"].sum().sort_values(ascending=True).index.tolist()
+        cat_summary["categoria_llm"] = pd.Categorical(
+            cat_summary["categoria_llm"], categories=cat_order, ordered=True
+        )
+        cat_summary = cat_summary.sort_values("categoria_llm")
+        cat_summary["color"] = cat_summary["candidato_credito"].map(
+            {True: GREEN_DARK, False: "#9ca3af"}
+        )
+
+        fig_llm = go.Figure(go.Bar(
+            x=cat_summary["N"],
+            y=cat_summary["categoria_llm"].astype(str),
+            orientation="h",
+            marker_color=cat_summary["color"],
+            text=cat_summary["N"],
+            textposition="outside",
+            customdata=cat_summary["candidato_credito"].map(
+                {True: "Candidato al crédito", False: "No candidato"}
+            ),
+            hovertemplate="<b>%{y}</b><br>%{x} leads · %{customdata}<extra></extra>",
+        ))
+        fig_llm.update_layout(
+            paper_bgcolor=WHITE,
+            plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=max(360, len(cat_order) * 32 + 80),
+            margin=dict(l=220, r=50, t=10, b=10),
+            xaxis=dict(title="Leads", gridcolor="#ede8f5"),
+            yaxis=dict(gridcolor="#ede8f5", automargin=True),
+        )
+        st.plotly_chart(fig_llm, use_container_width=True)
+        st.caption(
+            "Verde = candidato al crédito (cliente quiere conservar el inmueble). "
+            "Gris = no candidato (necesita vender). Clasificación con gpt-4o-mini "
+            "sobre `motivo_venta_string` del recepcionista."
+        )
+
+        with st.expander("Detalle por nid · motivo y razón LLM", expanded=False):
+            cols_view = ["nid", "categoria_llm", "candidato_credito",
+                         "motivo_original", "razon_llm"]
+            st.dataframe(
+                df_llm_f[cols_view].rename(columns={
+                    "nid": "NID",
+                    "categoria_llm": "Categoría LLM",
+                    "candidato_credito": "Candidato",
+                    "motivo_original": "Motivo original",
+                    "razon_llm": "Razón LLM",
+                }),
+                hide_index=True, use_container_width=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
