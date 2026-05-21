@@ -105,21 +105,22 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
     """Funnel A/B del experimento Pre-Oferta MX, calculado en BQ.
 
     Devuelve un row por (nid, grupo, valor) donde:
-      - grupo = 'B' si el deal HubSpot tiene contacto_digital='seller'
-                (tratamiento del experimento)
-      - grupo = 'A' en cualquier otro caso (control = funnel completo de
-                Habi MX sin el tratamiento)
+      - grupo = 'B' si el deal HubSpot tiene contacto_digital='seller' creado
+                dentro de la ventana del experimento (universo del tratamiento)
+      - grupo = 'A' = TODO el funnel MX que pasó por alguna etapa en el rango
+                y NO es del tratamiento. Incluye deals viejos cuyo cierre
+                cayó en mayo aunque hayan sido creados meses antes.
 
-    La ventaja vs construir esto desde la API de HubSpot es velocidad y
-    completitud: no depende de paginar 9000+ deals.
+    Esto hace que el funnel A muestre los 55 cierres OCD reales del producto
+    (matchea con el funnel mensual MX), no solo la cohorte del experimento.
 
-    Tanto el universo (createdate del deal) como el funnel (fecha de etapa)
-    respetan el rango [since_iso, until_iso].
+    Tanto el universo del control como el funnel (fecha de etapa) respetan
+    el rango [since_iso, until_iso].
     """
     if not until_iso:
         until_iso = "9999-12-31"
     sql = f"""
-    WITH tratamiento_nids AS (
+    WITH seller_nids AS (
       SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
       WHERE LOWER(contacto_digital) = 'seller'
@@ -135,23 +136,22 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
       WHERE DATE(fecha) BETWEEN '{since_iso}' AND '{until_iso}'
       GROUP BY nid, valor
     ),
+    universe_a AS (
+      -- Todos los nids del funnel MX que NO son del experimento (tratamiento)
+      SELECT DISTINCT f.nid, 'A' AS grupo
+      FROM funnel f
+      LEFT JOIN seller_nids s USING(nid)
+      WHERE s.nid IS NULL
+    ),
+    universe_b AS (
+      -- Universo del experimento: deals seller creados en la ventana,
+      -- aunque todavía no hayan pasado por ninguna etapa
+      SELECT DISTINCT nid, 'B' AS grupo FROM seller_nids
+    ),
     universos AS (
-      SELECT
-        CAST(nid AS INT64) AS nid,
-        'A' AS grupo
-      FROM `sellers-main-prod.hubspot.deals`
-      WHERE LOWER(country) IN ('méxico', 'mexico')
-        AND (LOWER(contacto_digital) != 'seller' OR contacto_digital IS NULL)
-        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
-        AND nid IS NOT NULL
+      SELECT * FROM universe_a
       UNION ALL
-      SELECT
-        CAST(nid AS INT64) AS nid,
-        'B' AS grupo
-      FROM `sellers-main-prod.hubspot.deals`
-      WHERE LOWER(contacto_digital) = 'seller'
-        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
-        AND nid IS NOT NULL
+      SELECT * FROM universe_b
     )
     SELECT
       u.nid,
