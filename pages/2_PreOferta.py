@@ -173,9 +173,14 @@ def load_funnel_mex(nids: tuple[int, ...], date_from: str, date_to: str) -> pd.D
     return bq_src.fetch_funnel_mex(list(nids), date_from=date_from, date_to=date_to)
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · A/B funnel MX…", persist="disk")
-def load_ab_funnel_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
-    """Funnel A/B armado en BQ: cada (nid, grupo) con sus etapas."""
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · A/B funnel MX…")
+def load_ab_funnel_mex_v2(since_iso: str, until_iso: str) -> pd.DataFrame:
+    """Funnel A/B armado en BQ: cada (nid, grupo) con sus etapas.
+
+    Renombrada con _v2 para invalidar el cache de disco que tenía la versión
+    vieja donde A se restringía a deals creados en la ventana del experimento.
+    Ahora A cuenta TODO el funnel MX no-seller en el rango.
+    """
     return bq_src.fetch_ab_funnel_mex(since_iso, until_iso)
 
 
@@ -548,7 +553,7 @@ st.markdown("<h2>Comparativa A/B · Control vs Tratamiento</h2>", unsafe_allow_h
 # que paginar 9000+ deals desde HubSpot). El control queda definido como
 # "todo MX no-seller" y el tratamiento como contacto_digital='seller'.
 try:
-    df_ab = load_ab_funnel_mex(since_iso, until_iso)
+    df_ab = load_ab_funnel_mex_v2(since_iso, until_iso)
 except Exception as exc:
     df_ab = pd.DataFrame()
     st.warning(f"BQ A/B funnel: {type(exc).__name__}: {exc}")
