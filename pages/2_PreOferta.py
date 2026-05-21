@@ -460,53 +460,48 @@ n_pendiente_oferta = _count_stage("Pendiente respuesta oferta")
 n_aceptada = _count_stage("Acepto Oferta - Pendiente firma")
 n_cierre = _count_stage("Cierre - Comprado") + _count_stage("Cierre  OCD")
 
+# Embudo general (sin interacciones CTA: las ves en KPIs + filtro sidebar).
 stages = [
-    ("Universo (Seller MX)",          n_universo,         f"HubSpot · contacto_digital=seller"),
-    ("Enviados WA",                   n_wa,               f"Estimado · {int(WA_DELIVERY*100)}% × Universo"),
-    ("Abrieron link",                 n_opened,           "Sheets LOGS · dedup por uuid"),
-    ("Quiero oferta",                 n_oferta,           "HS quiero_recibir_oferta_formal > 0"),
-    ("Tengo preguntas",               n_preg,             "HS tengo_preguntas > 0 (sin oferta)"),
-    ("Asignados",                     n_asig,             "owner≠JuanQ + prioridad_gestion_mm"),
-    ("Cita Agendada",                 n_cita_agendada,    "BQ · Cita Agendada (hubspot)"),
-    ("Visita Efectuada",              n_visita,           "BQ · Visita Efectuada (hubspot)"),
-    ("Pre-comité validado",           n_pre_comite,       "BQ · Pre-comite validado"),
-    ("Aprobado General",              n_aprobado,         "BQ · Aprobado General"),
-    ("Pendiente respuesta oferta",    n_pendiente_oferta, "BQ · Pendiente respuesta oferta"),
-    ("Acepto oferta · pendiente firma", n_aceptada,       "BQ · Acepto Oferta - Pendiente firma"),
-    ("Cierre",                        n_cierre,           "BQ · Cierre - Comprado + Cierre OCD"),
+    ("Universo (Seller MX)",            n_universo,         "HubSpot · contacto_digital=seller"),
+    ("Enviados WA",                     n_wa,               f"Estimado · {int(WA_DELIVERY*100)}% × Universo"),
+    ("Abrieron link",                   n_opened,           "Sheets LOGS · dedup por uuid"),
+    ("Asignados",                       n_asig,             "pipeline = Market Maker MX (NUEVO)"),
+    ("Cita Agendada",                   n_cita_agendada,    "BQ · Cita Agendada (hubspot)"),
+    ("Visita Efectuada",                n_visita,           "BQ · Visita Efectuada (hubspot)"),
+    ("Pre-comité validado",             n_pre_comite,       "BQ · Pre-comite validado"),
+    ("Aprobado General",                n_aprobado,         "BQ · Aprobado General"),
+    ("Pendiente respuesta oferta",      n_pendiente_oferta, "BQ · Pendiente respuesta oferta"),
+    ("Acepto oferta · pendiente firma", n_aceptada,         "BQ · Acepto Oferta - Pendiente firma"),
+    ("Cierre",                          n_cierre,           "BQ · Cierre - Comprado + Cierre OCD"),
 ]
 
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
 f_sources = [s[2] for s in stages]
-# Gradiente morado → verde
-n = len(stages)
-palette = [DEEP, "#3a1956", PRIMARY, MED, "#9050c0", ACCENT, LIGHT, "#bd8be3", PALE,
-           GREEN_LIGHT, "#7eb37e", GREEN_DARK, "#0f5535"]
-f_colors = palette[:n]
-f_text = [
-    f"{v:,}  ({v/f_vals[i-1]*100:.0f}%)" if i > 0 and f_vals[i-1] > 0 else f"{v:,}"
-    for i, v in enumerate(f_vals)
-]
-nonzero = [v for v in f_vals if v > 0]
-use_log = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
-fig_funnel = go.Figure(go.Bar(
-    x=f_vals, y=f_labels, orientation="h",
-    marker_color=f_colors, text=f_text,
-    textposition="outside", textfont=dict(size=11, color=DEEP),
+fig_funnel = go.Figure(go.Funnel(
+    y=f_labels, x=f_vals,
+    textinfo="value+percent initial+percent previous",
+    textposition="inside",
+    textfont=dict(size=11, color="#fff"),
+    marker=dict(color=[
+        DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT,
+        "#bd8be3", PALE, GREEN_LIGHT, "#7eb37e", GREEN_DARK,
+    ][:len(stages)]),
     customdata=f_sources,
-    hovertemplate="<b>%{y}</b><br>%{x:,} · %{customdata}<extra></extra>",
+    hovertemplate="<b>%{y}</b><br>%{x:,} leads<br>%{customdata}<extra></extra>",
+    connector=dict(line=dict(color=PALE, width=1)),
 ))
 fig_funnel.update_layout(
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=520, margin=dict(l=10, r=240, t=10, b=10),
-    xaxis=dict(type="log" if use_log else "linear",
-               title="Clientes" + (" (log)" if use_log else ""),
-               gridcolor="#ede8f5", tickformat=",d"),
-    yaxis=dict(autorange="reversed"),
+    height=520, margin=dict(l=10, r=10, t=10, b=10),
 )
 st.plotly_chart(fig_funnel, use_container_width=True)
+st.caption(
+    "**% inicial** = vs el Universo · **% anterior** = conversión etapa→etapa. "
+    "Las interacciones CTA (Quiero oferta · Tengo preguntas) están en los KPIs "
+    "arriba y se filtran desde el sidebar."
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -583,52 +578,74 @@ col_c, col_t = st.columns(2)
 labels = [s[0] for s in COMPARE_STAGES]
 
 
-def _vfunnel(values: list[int], title: str, color_start: str, color_end: str):
-    n = len(values)
-    palette_v = []
-    for i in range(n):
-        ratio = i / max(1, n - 1)
-        # Interpolación lineal entre dos hex colors
-        c1 = tuple(int(color_start.lstrip("#")[j:j+2], 16) for j in (0, 2, 4))
-        c2 = tuple(int(color_end.lstrip("#")[j:j+2], 16) for j in (0, 2, 4))
-        mix = tuple(int(c1[k] + (c2[k] - c1[k]) * ratio) for k in range(3))
-        palette_v.append(f"rgb({mix[0]},{mix[1]},{mix[2]})")
-    text = [
-        f"{v:,}" + (f"  ({v/values[i-1]*100:.0f}%)" if i > 0 and values[i-1] > 0 else "")
-        for i, v in enumerate(values)
-    ]
-    fig = go.Figure(go.Bar(
-        x=values, y=labels, orientation="h",
-        marker_color=palette_v, text=text,
-        textposition="outside", textfont=dict(size=10, color=DEEP),
+def _funnel_chart(values: list[int], title: str, palette: list[str]):
+    """Funnel chart con conversion etapa-a-etapa y % vs Universo."""
+    fig = go.Figure(go.Funnel(
+        y=labels, x=values,
+        textinfo="value+percent initial+percent previous",
+        textposition="inside",
+        textfont=dict(size=11, color="#fff"),
+        marker=dict(color=palette[:len(values)]),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "%{x:,} leads<br>"
+            "%{percentInitial} del universo<br>"
+            "%{percentPrevious} vs etapa anterior"
+            "<extra></extra>"
+        ),
+        connector=dict(line=dict(color=PALE, width=1)),
     ))
     fig.update_layout(
         title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=360, margin=dict(l=10, r=180, t=44, b=10),
-        xaxis=dict(title="Leads", gridcolor="#ede8f5", tickformat=",d"),
-        yaxis=dict(autorange="reversed"),
+        height=400, margin=dict(l=10, r=10, t=44, b=10),
     )
     return fig
 
 
+# Control (A) izquierda · Tratamiento (B) derecha
+PALETTE_CONTROL = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE]
+PALETTE_TRATAMIENTO = [GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
+                       "#7eb37e", GREEN_LIGHT, "#cce4ce"]
 with col_c:
     st.plotly_chart(
-        _vfunnel(vals_c, "Funnel actual · control (B, sin pre-oferta)", PRIMARY, DEEP),
+        _funnel_chart(vals_c, "A · Control (B sin pre-oferta)", PALETTE_CONTROL),
         use_container_width=True,
     )
 with col_t:
     st.plotly_chart(
-        _vfunnel(vals_t, "Funnel con pre-oferta · tratamiento", LIGHT, GREEN_DARK),
+        _funnel_chart(vals_t, "B · Tratamiento (con pre-oferta)", PALETTE_TRATAMIENTO),
         use_container_width=True,
     )
 
 cvr_c = vals_c[-1] / vals_c[1] if len(vals_c) > 1 and vals_c[1] > 0 else 0.0
 cvr_t = vals_t[-1] / vals_t[1] if len(vals_t) > 1 and vals_t[1] > 0 else 0.0
+delta_cvr_main_pp = (cvr_t - cvr_c) * 100
+delta_color = GREEN_DARK if delta_cvr_main_pp >= 0 else RED
+st.markdown(
+    f"<div style='display:flex;gap:14px;margin-top:6px'>"
+    f"<div style='flex:1;background:{WHITE};border-left:4px solid {PRIMARY};"
+    f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
+    f"<b>Control · CVR asignación→cierre</b>"
+    f"<div style='font-size:1.3rem;font-weight:700;color:{PRIMARY}'>"
+    f"{cvr_c*100:.2f}% · {vals_c[-1]}/{vals_c[1]}</div></div>"
+    f"<div style='flex:1;background:{WHITE};border-left:4px solid {GREEN_DARK};"
+    f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
+    f"<b>Tratamiento · CVR asignación→cierre</b>"
+    f"<div style='font-size:1.3rem;font-weight:700;color:{GREEN_DARK}'>"
+    f"{cvr_t*100:.2f}% · {vals_t[-1]}/{vals_t[1]}</div></div>"
+    f"<div style='flex:1;background:{WHITE};border-left:4px solid {delta_color};"
+    f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
+    f"<b>Δ Tratamiento - Control</b>"
+    f"<div style='font-size:1.3rem;font-weight:700;color:{delta_color}'>"
+    f"{delta_cvr_main_pp:+.2f}pp</div></div>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
 st.caption(
-    f"CVR asignación → cierre · Control: {cvr_c*100:.2f}% ({vals_c[-1]}/{vals_c[1]}) · "
-    f"Tratamiento: {cvr_t*100:.2f}% ({vals_t[-1]}/{vals_t[1]}). "
+    "**% inicial** = porcentaje sobre el universo (Lead llega). "
+    "**% anterior** = conversión de la etapa previa. "
     "Aún muy temprano — los cierres tardan semanas en aparecer."
 )
 
