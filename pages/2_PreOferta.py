@@ -179,8 +179,10 @@ def load_ab_funnel_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
     return bq_src.fetch_ab_funnel_mex(since_iso, until_iso)
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel mensual MX…", persist="disk")
-def load_funnel_monthly_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel mensual MX…")
+def load_funnel_monthly_mex_ab(since_iso: str, until_iso: str) -> pd.DataFrame:
+    """Funnel mensual A/B. Renombrada de load_funnel_monthly_mex para invalidar
+    el cache de disco que tenía la versión sin la columna `grupo`."""
     return bq_src.fetch_funnel_monthly_mex(since_iso, until_iso)
 
 
@@ -682,10 +684,14 @@ st.markdown(
 st.markdown("<h2>Funnel mensual MX · A control vs B tratamiento</h2>", unsafe_allow_html=True)
 
 try:
-    df_monthly = load_funnel_monthly_mex(since_iso, until_iso)
+    df_monthly = load_funnel_monthly_mex_ab(since_iso, until_iso)
 except Exception as exc:
     df_monthly = pd.DataFrame()
     st.warning(f"BQ funnel mensual: {type(exc).__name__}: {exc}")
+
+# Defensa contra cache antiguo o respuestas inconsistentes
+if not df_monthly.empty and "grupo" not in df_monthly.columns:
+    df_monthly = df_monthly.assign(grupo="A")
 
 # Helper: aclarar un color hex en N% para diferenciar control (claro) del
 # tratamiento (intenso) manteniendo la familia de color.
@@ -726,6 +732,8 @@ if not df_monthly.empty:
         sub = df_monthly[df_monthly["valor"] == stage].copy()
         if sub.empty:
             continue
+        if "grupo" not in sub.columns:
+            sub = sub.assign(grupo="A")
         color_light = _lighten(color_dark, 0.55)
 
         # Pivot: una fila por mes, columnas A y B
