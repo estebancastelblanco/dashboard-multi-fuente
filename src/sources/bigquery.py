@@ -170,35 +170,40 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
 def fetch_funnel_monthly_mex(
     since_iso: str, until_iso: str | None = None,
 ) -> pd.DataFrame:
-    """Funnel MX agregado por mes y por grupo (A control / B tratamiento).
+    """Funnel MX completo agregado por mes con flag de A/B.
 
-    Solo cuenta nids que pertenecen al experimento (deals creados en la
-    ventana, sea seller=B o no-seller=A), para que sea consistente con la
-    sección Comparativa A/B y la decisión del experimento.
+    A diferencia de fetch_ab_funnel_mex (que restringe el universo a deals
+    creados en la ventana), esta query cuenta TODOS los nids que pasaron por
+    cada etapa de `seguimiento_funnel_mex` dentro del rango. Eso replica el
+    dashboard oficial del producto (donde un Cierre OCD de mayo cuenta aunque
+    el deal se creó en marzo).
+
+    El grupo se asigna así:
+      - 'B' (tratamiento) si el nid pertenece a un deal con
+            contacto_digital='seller' creado dentro del rango del experimento
+      - 'A' (control) en cualquier otro caso
 
     Devuelve `mes, valor, grupo, leads`.
     """
     if not until_iso:
         until_iso = "9999-12-31"
     sql = f"""
-    WITH nids_exp AS (
-      SELECT DISTINCT
-        CAST(nid AS INT64) AS nid,
-        CASE WHEN LOWER(contacto_digital) = 'seller' THEN 'B' ELSE 'A' END AS grupo
+    WITH seller_nids AS (
+      SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
-      WHERE LOWER(country) IN ('méxico', 'mexico')
+      WHERE LOWER(contacto_digital) = 'seller'
         AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
         AND nid IS NOT NULL
     )
     SELECT
       DATE_TRUNC(DATE(f.fecha), MONTH) AS mes,
       f.valor,
-      e.grupo,
+      CASE WHEN s.nid IS NOT NULL THEN 'B' ELSE 'A' END AS grupo,
       COUNT(DISTINCT f.nid) AS leads
     FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex` f
-    INNER JOIN nids_exp e USING(nid)
+    LEFT JOIN seller_nids s USING(nid)
     WHERE DATE(f.fecha) BETWEEN '{since_iso}' AND '{until_iso}'
-    GROUP BY mes, f.valor, e.grupo
+    GROUP BY mes, f.valor, grupo
     ORDER BY mes, leads DESC
     """
     df = _client().query(sql).to_dataframe()
