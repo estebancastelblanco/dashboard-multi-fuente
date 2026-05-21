@@ -183,6 +183,7 @@ PREOFERTA_PROPS: dict[str, str] = {
     "createdate":                       "Fecha de creación",
     "pipeline":                         "Pipeline",
     "dealstage":                        "Etapa",
+    "estado":                           "Estado del Negocio",
     "deal_uuid":                        "deal_uuid",
     "nid":                              "nid",
     "contacto_digital":                 "Contacto Digital",

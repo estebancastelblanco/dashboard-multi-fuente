@@ -78,6 +78,15 @@ DEALSTAGE_ASIGNADO = "1066429804"
 MAX_DIAS_SIN_ASIGNAR = 4         # del diseño: si pasaron 4 dias debe asignarse si o si
 MAX_ENVIOS = 4                   # workflow HubSpot manda 4 plantillas (dia 1..4)
 
+# Estados (propiedad `estado`) que SI permiten asignar al market maker.
+# Cualquier otro estado significa que el deal no debe asignarse aun (esta
+# en pricing, descartado, vendido, etc.)
+ESTADOS_ASIGNABLES: dict[str, str] = {
+    "20": "No gestionado",
+    "36": "No hay suficientes datos para comparar",
+    "63": "Sin pricing inicial",
+}
+
 
 UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
 EXP_DOMAIN = "ofertadesdeasignado"
@@ -195,6 +204,15 @@ def _interaccion(row) -> str:
     if int(row.get("error_preoferta", 0) or 0) > 0:
         return "Error"
     return "Sin interacción"
+
+
+@st.cache_data(ttl=DAY, show_spinner="HubSpot · opciones de Estado…", persist="disk")
+def load_estado_options() -> dict[str, str]:
+    """Mapping value(str) -> label de la propiedad `estado` de Deal."""
+    try:
+        return hs_src.fetch_property_options("estado")
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=SHORT, show_spinner="Supabase · envios WA…")
@@ -362,6 +380,9 @@ df_sends = load_whatsapp_sends(since_iso, until_iso)
 df_interactions = load_deal_interactions(since_iso, until_iso)
 df_assignments = load_deal_assignments(since_iso, until_iso)
 
+# Labels legibles para los codigos de `estado` (necesario para el kanban)
+estado_options = load_estado_options()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Derivados: cacheados en memoria con enrich_deals_df
@@ -372,6 +393,16 @@ if not df_logs.empty and "uuid" in df_logs.columns:
 
 df_t = enrich_deals_df(df_t, owner_email_map, opened_uuids_set, JUAN_OWNER_EMAIL)
 opened_uuids = set(opened_uuids_set)
+
+# Decodear `estado` (HubSpot devuelve el value, no el label)
+if "estado" in df_t.columns:
+    df_t["estado_code"] = df_t["estado"].astype(str)
+    df_t["estado_label"] = df_t["estado_code"].map(estado_options).fillna("(sin estado)")
+    df_t.loc[df_t["estado_code"] == "nan", "estado_label"] = "(sin estado)"
+else:
+    df_t["estado_code"] = ""
+    df_t["estado_label"] = "(sin estado)"
+df_t["es_asignable_estado"] = df_t["estado_code"].isin(ESTADOS_ASIGNABLES.keys())
 
 
 # Aplicar filtros del sidebar al tratamiento
@@ -830,7 +861,7 @@ st.plotly_chart(fig_envios, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pipeline de no-asignados · alerta de >4 días sin asignación al MM
+# Pipeline de no-asignados · kanban estilo CRM
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(
     f"<h2>Pipeline de no-asignados · alerta &gt; {MAX_DIAS_SIN_ASIGNAR} días</h2>",
@@ -839,54 +870,135 @@ st.markdown(
 st.caption(
     f"Deals seller en pipeline ORIGEN ({PIPELINE_ORIGEN}) que aún no fueron "
     f"movidos al pipeline destino ({PIPELINE_DESTINO} · Market Maker MX). "
-    f"Cuando un lead supera los {MAX_DIAS_SIN_ASIGNAR} días sin asignar, "
-    "el cron diario lo asigna automáticamente; si no, se requiere acción manual."
+    "Solo son **asignables** los que están en estado: "
+    + ", ".join(f"<em>{lab}</em>" for lab in ESTADOS_ASIGNABLES.values())
+    + ". El resto debe permanecer en su flujo (pricing, descarte, etc.)",
+    unsafe_allow_html=True,
 )
 
-# IMPORTANTE: para esta seccion ignoramos los filtros del sidebar de
-# 'asignacion' y 'cta' — queremos ver TODO lo no asignado, no lo filtrado.
-df_no_asig = df_t[df_t["pipeline"].astype(str) == PIPELINE_ORIGEN].copy()
-df_no_asig = df_no_asig.sort_values("dias_desde_creacion", ascending=False)
+# IMPORTANTE: ignoramos filtros del sidebar — queremos ver TODO lo no asignado.
+df_no_asig_all = df_t[df_t["pipeline"].astype(str) == PIPELINE_ORIGEN].copy()
+df_no_asig_all = df_no_asig_all.sort_values("dias_desde_creacion", ascending=False)
 
-n_no_asig = len(df_no_asig)
-n_urgentes = int((df_no_asig["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
-n_pendientes = n_no_asig - n_urgentes
-prom_dias_no_asig = float(df_no_asig["dias_desde_creacion"].mean()) if n_no_asig else 0.0
+# Layout dos columnas: filtro a la izquierda + kanban a la derecha
+side_col, board_col = st.columns([1, 5])
 
-na_c1, na_c2, na_c3, na_c4 = st.columns(4)
-na_c1.markdown(kpi_card("Total no asignados", f"{n_no_asig:,}",
-                        f"pipeline = {PIPELINE_ORIGEN}"), unsafe_allow_html=True)
-na_c2.markdown(_alarm_card(
-    f"Urgentes (≥ {MAX_DIAS_SIN_ASIGNAR}d)",
-    f"{n_urgentes:,}",
-    "deben asignarse hoy",
-    n_urgentes > 0,
-), unsafe_allow_html=True)
-na_c3.markdown(kpi_card("Dentro de ventana", f"{n_pendientes:,}",
-                        f"< {MAX_DIAS_SIN_ASIGNAR} días desde creación"),
-               unsafe_allow_html=True)
-na_c4.markdown(kpi_card("Días promedio", f"{prom_dias_no_asig:.1f}",
-                        "sin asignar"), unsafe_allow_html=True)
+with side_col:
+    st.markdown(
+        f"<div style='color:{MED};font-weight:600;font-size:0.75rem;"
+        f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px'>"
+        f"Filtro</div>",
+        unsafe_allow_html=True,
+    )
+    kanban_mode = st.radio(
+        "kanban_mode",
+        ["Asignables", "No asignables"],
+        index=0,
+        label_visibility="collapsed",
+    )
 
-if n_no_asig > 0:
-    show_no = [
-        ("dealname",        "Nombre"),
-        ("createdate",      "Fecha creación"),
-        ("dias_desde_creacion", "Días esperando"),
-        ("preofertaflag1",  "Envíos hechos"),
-        ("dealstage",       "Etapa"),
-        ("interaccion",     "Interacción"),
-        ("phone",           "Teléfono"),
-        ("hs_object_id",    "deal_id"),
-        ("deal_uuid",       "deal_uuid"),
-    ]
-    present_no = [(s, l) for s, l in show_no if s in df_no_asig.columns]
-    df_no_display = df_no_asig[[s for s, _ in present_no]].rename(columns=dict(present_no))
-    if "Días esperando" in df_no_display.columns:
-        df_no_display["Días esperando"] = df_no_display["Días esperando"].astype(float).round(1)
-    st.dataframe(df_no_display, hide_index=True, use_container_width=True)
-else:
-    st.success("Ningún deal seller pendiente de asignación en el rango.")
+    if kanban_mode == "Asignables":
+        df_kanban = df_no_asig_all[df_no_asig_all["es_asignable_estado"]].copy()
+        cols_order: list[tuple[str, str]] = list(ESTADOS_ASIGNABLES.items())
+    else:
+        df_kanban = df_no_asig_all[~df_no_asig_all["es_asignable_estado"]].copy()
+        # Una columna por estado encontrado (top 6 para no saturar)
+        top_estados = (
+            df_kanban["estado_code"].fillna("").value_counts().head(6).index.tolist()
+        )
+        cols_order = [
+            (code, estado_options.get(code, code) or "(sin estado)")
+            for code in top_estados
+        ]
+
+    n_kanban = len(df_kanban)
+    n_urgentes_k = int((df_kanban["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
+    prom_dias_k = float(df_kanban["dias_desde_creacion"].mean()) if n_kanban else 0.0
+    st.markdown(kpi_card("Total", f"{n_kanban:,}", f"{kanban_mode.lower()}"),
+                unsafe_allow_html=True)
+    st.markdown(_alarm_card(
+        f"Urgentes ≥ {MAX_DIAS_SIN_ASIGNAR}d",
+        f"{n_urgentes_k:,}",
+        "deben moverse hoy",
+        n_urgentes_k > 0,
+    ), unsafe_allow_html=True)
+    st.markdown(kpi_card("Días promedio", f"{prom_dias_k:.1f}",
+                         "desde creación"), unsafe_allow_html=True)
+
+
+def _kanban_card(row) -> str:
+    dias = float(row.get("dias_desde_creacion") or 0)
+    urgent = dias >= MAX_DIAS_SIN_ASIGNAR
+    accent = RED if urgent else PRIMARY
+    bg = "#fff5f5" if urgent else WHITE
+    name = str(row.get("dealname") or "(sin nombre)")[:42]
+    flag = int(row.get("preofertaflag1") or 0)
+    inter = str(row.get("interaccion") or "")
+    inter_badge = ""
+    if inter == "Quiero oferta":
+        inter_badge = f"<span style='background:{GREEN_DARK};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>oferta</span>"
+    elif inter == "Tengo preguntas":
+        inter_badge = f"<span style='background:{ACCENT};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>preguntas</span>"
+    elif inter == "Error":
+        inter_badge = f"<span style='background:{RED};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>error</span>"
+    urgent_badge = (
+        f"<span style='background:{RED};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;font-weight:700;margin-left:4px'>URG</span>"
+        if urgent else ""
+    )
+    phone = str(row.get("phone") or "").strip() or "—"
+    return (
+        f"<div style='background:{bg};border-left:3px solid {accent};"
+        f"border-radius:6px;padding:8px 10px;margin-bottom:8px;"
+        f"box-shadow:0 1px 3px rgba(46,17,71,0.07);font-size:0.78rem;color:{DEEP}'>"
+        f"<div style='font-weight:600;line-height:1.3;margin-bottom:4px'>"
+        f"{name}{urgent_badge}{inter_badge}</div>"
+        f"<div style='color:#666;font-size:0.7rem'>"
+        f"📅 {dias:.1f}d &nbsp;·&nbsp; ✉️ {flag}/{MAX_ENVIOS} envíos &nbsp;·&nbsp; 📞 {phone}"
+        f"</div>"
+        f"</div>"
+    )
+
+
+with board_col:
+    if not cols_order or n_kanban == 0:
+        st.info(
+            "No hay deals en este filtro. "
+            + ("¡Limpio! Nada urgente sin asignar." if kanban_mode == "Asignables"
+               else "Ningún deal no-asignable en el rango.")
+        )
+    else:
+        board_cols = st.columns(len(cols_order))
+        for (code, label), col in zip(cols_order, board_cols):
+            sub = df_kanban[df_kanban["estado_code"] == code]
+            n_col = len(sub)
+            n_urg_col = int((sub["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
+            with col:
+                # Header columna
+                accent = RED if n_urg_col > 0 else PRIMARY
+                st.markdown(
+                    f"<div style='background:{DEEP};color:#fff;"
+                    f"padding:8px 10px;border-radius:6px;margin-bottom:10px;"
+                    f"border-top:3px solid {accent}'>"
+                    f"<div style='font-size:0.8rem;font-weight:700;line-height:1.2'>{label}</div>"
+                    f"<div style='font-size:0.7rem;opacity:0.85;margin-top:2px'>"
+                    f"{n_col} deals · {n_urg_col} urgentes</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                # Cards
+                if n_col == 0:
+                    st.markdown(
+                        f"<div style='color:{MED};font-size:0.72rem;font-style:italic;"
+                        f"padding:6px 4px'>Sin deals</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    cards_html = "".join(
+                        _kanban_card(row) for _, row in sub.head(40).iterrows()
+                    )
+                    st.markdown(cards_html, unsafe_allow_html=True)
+                    if n_col > 40:
+                        st.caption(f"+{n_col - 40} más…")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
