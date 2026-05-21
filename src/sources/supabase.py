@@ -18,9 +18,22 @@ import pandas as pd
 import requests
 
 
+# Defaults hardcodeados para no depender de Streamlit Secrets mientras el
+# experimento esta arrancando y aun hay pocos datos. Si en el futuro se
+# necesita rotar, basta con setear SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+# en env / st.secrets — las env vars tienen precedencia sobre estos defaults.
+_DEFAULT_SUPABASE_URL = "https://vrdlvbefebojlrzjjaht.supabase.co"
+_DEFAULT_SUPABASE_SERVICE_ROLE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyZGx2YmVmZWJvamxyempqYWh0Iiwicm9s"
+    "ZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTM0MjE0MywiZXhwIjoyMDk0OTE4MTQzfQ."
+    "8JbfLBxGYb-IPIXPnnrUCvufFg0914hiRbzEooel2Gk"
+)
+
+
 def _config() -> tuple[str, str]:
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    url = (os.environ.get("SUPABASE_URL") or _DEFAULT_SUPABASE_URL).rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or _DEFAULT_SUPABASE_SERVICE_ROLE_KEY
     if not url or not key:
         raise RuntimeError(
             "Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en env / st.secrets."
