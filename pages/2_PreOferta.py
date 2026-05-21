@@ -508,23 +508,12 @@ fig_funnel.update_layout(
     yaxis=dict(autorange="reversed"),
 )
 st.plotly_chart(fig_funnel, use_container_width=True)
-st.caption(
-    "Eje X en escala logarítmica · cada barra muestra absoluto, conversión "
-    "etapa→etapa y % vs universo. Los CTA (Quiero oferta / Tengo preguntas) "
-    "están como filtro en el sidebar; no son etapas del funnel comercial."
-)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel 2 · comparativo A/B (control vs tratamiento)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Comparativa A/B · Control vs Tratamiento</h2>", unsafe_allow_html=True)
-st.caption(
-    "**A · Control** = leads MX con `contacto_digital ≠ seller` (gabi, chatbot, null) "
-    "— funnel completo de Habi sin filtrar por categoría comercial. "
-    "**B · Tratamiento** = `contacto_digital = seller` (este experimento). "
-    "Las etapas se calculan sobre `seguimiento_funnel_mex` con los mismos filtros de fecha."
-)
 
 # Construir el conjunto de nids del control SIN filtrar por categoría: queremos
 # el funnel completo de Habi (excluyendo el tratamiento). El user lo pidió así
@@ -591,27 +580,42 @@ labels = [s[0] for s in COMPARE_STAGES]
 
 
 def _funnel_chart(values: list[int], title: str, palette: list[str]):
-    """Funnel chart con conversion etapa-a-etapa y % vs Universo."""
-    fig = go.Figure(go.Funnel(
-        y=labels, x=values,
-        textinfo="value+percent initial+percent previous",
-        textposition="inside",
-        textfont=dict(size=11, color="#fff"),
-        marker=dict(color=palette[:len(values)]),
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "%{x:,} leads<br>"
-            "%{percentInitial} del universo<br>"
-            "%{percentPrevious} vs etapa anterior"
-            "<extra></extra>"
-        ),
-        connector=dict(line=dict(color=PALE, width=1)),
+    """Bar horizontal en escala log con conversion etapa-a-etapa y % vs Universo.
+
+    `go.Funnel` se ve mal cuando hay disparidad gigante (9886 → 2): la cola
+    queda invisible. Por eso usamos `go.Bar` con xaxis log + etiquetas con
+    absoluto, % vs anterior y % vs universo.
+    """
+    universo = values[0] if values else 0
+    text = []
+    for i, v in enumerate(values):
+        if i == 0 or universo == 0:
+            text.append(f"{v:,}")
+        else:
+            prev = values[i - 1]
+            pct_prev = (v / prev * 100) if prev > 0 else 0
+            pct_uni = v / universo * 100
+            text.append(f"{v:,}  ({pct_prev:.0f}% vs ant · {pct_uni:.1f}% univ)")
+    nonzero = [v for v in values if v > 0]
+    use_log = (max(values) if values else 0) > 50 and (min(nonzero) if nonzero else 0) > 0
+    fig = go.Figure(go.Bar(
+        x=values, y=labels, orientation="h",
+        marker_color=palette[:len(values)],
+        text=text,
+        textposition="outside", textfont=dict(size=10, color=DEEP),
+        hovertemplate="<b>%{y}</b><br>%{x:,} leads<extra></extra>",
     ))
     fig.update_layout(
         title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=400, margin=dict(l=10, r=10, t=44, b=10),
+        height=420, margin=dict(l=10, r=240, t=44, b=10),
+        xaxis=dict(
+            type="log" if use_log else "linear",
+            title="Leads" + (" (log)" if use_log else ""),
+            gridcolor="#ede8f5", tickformat=",d",
+        ),
+        yaxis=dict(autorange="reversed"),
     )
     return fig
 
@@ -654,11 +658,6 @@ st.markdown(
     f"{delta_cvr_main_pp:+.2f}pp</div></div>"
     f"</div>",
     unsafe_allow_html=True,
-)
-st.caption(
-    "**% inicial** = porcentaje sobre el universo (Lead llega). "
-    "**% anterior** = conversión de la etapa previa. "
-    "Aún muy temprano — los cierres tardan semanas en aparecer."
 )
 
 
@@ -788,11 +787,6 @@ with st.expander("Cómo se calculan estos umbrales"):
 # Evolución de los 4 envíos · plantilla WhatsApp
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Evolución de los 4 envíos · plantilla WhatsApp</h2>", unsafe_allow_html=True)
-st.caption(
-    "Cómo van progresando los leads a través de los 4 envíos secuenciales. "
-    "La barra **Acumulado** responde a “¿cuántos recibieron al menos N envíos?” "
-    "y la **Actual** a “¿cuántos están exactamente en ese paso ahora mismo?”"
-)
 
 flag_series = (
     df_t_f["preofertaflag1"].fillna(0).astype(int).clip(lower=0, upper=MAX_ENVIOS)
@@ -882,14 +876,6 @@ for n in range(1, MAX_ENVIOS + 1):
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(
     f"<h2>Pipeline de no-asignados · alerta &gt; {MAX_DIAS_SIN_ASIGNAR} días</h2>",
-    unsafe_allow_html=True,
-)
-st.caption(
-    f"Deals seller en pipeline ORIGEN ({PIPELINE_ORIGEN}) que aún no fueron "
-    f"movidos al pipeline destino ({PIPELINE_DESTINO} · Market Maker MX). "
-    "Solo son **asignables** los que están en estado: "
-    + ", ".join(f"<em>{lab}</em>" for lab in ESTADOS_ASIGNABLES.values())
-    + ". El resto debe permanecer en su flujo (pricing, descarte, etc.)",
     unsafe_allow_html=True,
 )
 
@@ -1067,28 +1053,24 @@ with board_col:
                         unsafe_allow_html=True,
                     )
                 else:
-                    cards_html = "".join(
-                        _kanban_card(row) for _, row in sub.head(40).iterrows()
+                    # Contenedor con scroll vertical estilo Pipefy: todas las
+                    # cards quedan adentro y el usuario hace scroll dentro de
+                    # la columna sin saturar la página.
+                    cards_html = "".join(_kanban_card(row) for _, row in sub.iterrows())
+                    st.markdown(
+                        f"<div style='max-height:70vh;overflow-y:auto;"
+                        f"padding-right:6px;scrollbar-width:thin;"
+                        f"scrollbar-color:{MED} {PALE}'>"
+                        f"{cards_html}"
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
-                    st.markdown(cards_html, unsafe_allow_html=True)
-                    if n_col > 40:
-                        st.markdown(
-                            f"<div style='text-align:center;color:{MED};"
-                            f"font-size:0.7rem;font-style:italic;padding:4px'>"
-                            f"+ {n_col - 40} deals más</div>",
-                            unsafe_allow_html=True,
-                        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tracking Supabase · envíos, interacciones, asignaciones automáticas
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Tracking Supabase · envíos, interacciones y asignaciones</h2>", unsafe_allow_html=True)
-st.caption(
-    "Tablas pobladas en tiempo real por la landing (`whatsapp_sends`, "
-    "`deal_interactions`, `deal_assignments`). Sirven como log inmutable y "
-    "para responder ‘después de cuál envío fue que interactuó el cliente’."
-)
 
 # Restringimos las tablas Supabase a los deal_id que pertenecen al tratamiento
 # del rango (df_t en HubSpot). Esto evita contaminar con pruebas o con leads
@@ -1122,35 +1104,120 @@ sb4.markdown(kpi_card("Último envío WA", ultimo_envio, "max(sent_at)"),
              unsafe_allow_html=True)
 
 
-# Distribución: en qué envío interactuó cada cliente (1..4)
+# ---------------------------------------------------------------------------
+# Gráfico 1: Distribución de envíos reales por número de mensaje
+#   (data Supabase whatsapp_sends, NO HubSpot flag)
+# ---------------------------------------------------------------------------
+if not df_sends_t.empty and "send_number" in df_sends_t.columns:
+    s_send = pd.to_numeric(df_sends_t["send_number"], errors="coerce").fillna(0).astype(int)
+    s_send = s_send.clip(0, MAX_ENVIOS)
+    send_counts = s_send.value_counts().reindex(range(1, MAX_ENVIOS + 1), fill_value=0)
+
+    SEND_LABELS = {
+        1: "Mensaje 1 (día 1)",
+        2: "Mensaje 2 (día 2)",
+        3: "Mensaje 3 (día 3)",
+        4: "Mensaje 4 (día 4)",
+    }
+    s_labels = [SEND_LABELS[i] for i in range(1, MAX_ENVIOS + 1)]
+    s_vals = [int(send_counts.get(i, 0)) for i in range(1, MAX_ENVIOS + 1)]
+    total_sends = sum(s_vals)
+    s_pct = [(v / total_sends * 100) if total_sends else 0 for v in s_vals]
+
+    fig_sends = go.Figure(go.Bar(
+        x=s_labels, y=s_vals,
+        marker_color=[GREEN_LIGHT, "#7eb37e", "#1f7a2a", GREEN_DARK],
+        text=[f"{v:,}<br><span style='font-size:0.7rem;opacity:0.85'>{p:.1f}%</span>"
+              for v, p in zip(s_vals, s_pct)],
+        textposition="outside",
+        textfont=dict(size=11, color=DEEP),
+        hovertemplate="<b>%{x}</b><br>%{y:,} envíos<extra></extra>",
+    ))
+    fig_sends.update_layout(
+        title=dict(text=f"Envíos realizados por número de mensaje · total {total_sends:,}",
+                   font=dict(size=13, color=DEEP, family="Inter")),
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        height=320, margin=dict(l=10, r=10, t=50, b=10),
+        xaxis=dict(gridcolor="#ede8f5"),
+        yaxis=dict(title="Envíos", gridcolor="#ede8f5", tickformat=",d"),
+    )
+    st.plotly_chart(fig_sends, use_container_width=True)
+else:
+    st.info("Aún no hay envíos registrados en `whatsapp_sends`.")
+
+
+# ---------------------------------------------------------------------------
+# Gráfico 2: Timeline de envíos por día (todas las plantillas)
+# ---------------------------------------------------------------------------
+if not df_sends_t.empty and "sent_at" in df_sends_t.columns:
+    df_timeline = df_sends_t.copy()
+    df_timeline["dia"] = pd.to_datetime(df_timeline["sent_at"], utc=True, errors="coerce").dt.date
+    by_day = (
+        df_timeline.dropna(subset=["dia"])
+        .groupby(["dia", "send_number"]).size()
+        .reset_index(name="envios")
+    )
+    if not by_day.empty:
+        fig_timeline = go.Figure()
+        for sn, color in zip([1, 2, 3, 4], [GREEN_LIGHT, "#7eb37e", "#1f7a2a", GREEN_DARK]):
+            sub = by_day[by_day["send_number"] == sn]
+            fig_timeline.add_trace(go.Bar(
+                x=sub["dia"], y=sub["envios"],
+                name=f"Mensaje {sn}",
+                marker_color=color,
+                hovertemplate="<b>Mensaje " + str(sn) + "</b><br>%{x|%Y-%m-%d}<br>%{y} envíos<extra></extra>",
+            ))
+        fig_timeline.update_layout(
+            barmode="stack",
+            title=dict(text="Envíos por día · apilado por número de mensaje",
+                       font=dict(size=13, color=DEEP, family="Inter")),
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=300, margin=dict(l=10, r=10, t=50, b=10),
+            xaxis=dict(title="Día", gridcolor="#ede8f5"),
+            yaxis=dict(title="Envíos", gridcolor="#ede8f5", tickformat=",d"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+        )
+        st.plotly_chart(fig_timeline, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Gráfico 3 y 4: dónde clickeó / dónde se asignó (Supabase deal_*)
+# ---------------------------------------------------------------------------
 def _send_number_dist(df: pd.DataFrame, title: str, color: str):
     if df.empty or "send_number" not in df.columns:
-        st.caption(f"{title}: sin datos en el rango.")
+        st.markdown(
+            f"<div style='background:{WHITE};border:1px dashed #d9cfee;border-radius:8px;"
+            f"padding:30px 16px;text-align:center;color:{MED};font-size:0.78rem'>"
+            f"<b>{title}</b><br><span style='font-style:italic;font-size:0.72rem'>"
+            f"Sin datos en el rango</span></div>",
+            unsafe_allow_html=True,
+        )
         return
     s = pd.to_numeric(df["send_number"], errors="coerce").fillna(0).astype(int).clip(0, MAX_ENVIOS)
     counts = s.value_counts().reindex(range(1, MAX_ENVIOS + 1), fill_value=0)
-    labels = [f"Después del envío {i}" for i in range(1, MAX_ENVIOS + 1)]
+    labels = [f"Tras envío {i}" for i in range(1, MAX_ENVIOS + 1)]
     vals = [int(counts.get(i, 0)) for i in range(1, MAX_ENVIOS + 1)]
     fig = go.Figure(go.Bar(
-        x=vals, y=labels, orientation="h",
+        x=labels, y=vals,
         marker_color=color,
         text=[f"{v:,}" for v in vals], textposition="outside",
-        textfont=dict(size=10, color=DEEP),
+        textfont=dict(size=11, color=DEEP),
     ))
     fig.update_layout(
         title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=240, margin=dict(l=10, r=60, t=44, b=10),
-        xaxis=dict(title="Clientes", gridcolor="#ede8f5", tickformat=",d"),
-        yaxis=dict(autorange="reversed"),
+        height=280, margin=dict(l=10, r=10, t=44, b=10),
+        xaxis=dict(gridcolor="#ede8f5"),
+        yaxis=dict(title="Eventos", gridcolor="#ede8f5", tickformat=",d"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
 dist_c1, dist_c2 = st.columns(2)
 with dist_c1:
-    # Filtrar interacciones positivas (oferta + preguntas, sin error)
     if not df_inter_t.empty and "property" in df_inter_t.columns:
         df_inter_pos = df_inter_t[df_inter_t["property"].isin(
             ["quiero_recibir_oferta_formal", "tengo_preguntas"]
@@ -1159,7 +1226,7 @@ with dist_c1:
         df_inter_pos = df_inter_t
     _send_number_dist(
         df_inter_pos,
-        "¿En qué envío clickeó? (oferta + preguntas)",
+        "¿Tras cuál envío clickeó? (oferta + preguntas)",
         PRIMARY,
     )
 
@@ -1167,12 +1234,14 @@ with dist_c2:
     _send_number_dist(
         df_asig_t.rename(columns={"send_number_at_assignment": "send_number"})
         if not df_asig_t.empty else df_asig_t,
-        "¿En qué envío se asignó al MM?",
+        "¿Tras cuál envío se asignó al MM?",
         ACCENT,
     )
 
 
-# Desglose de razones de asignación (interaction_* vs day4_*)
+# ---------------------------------------------------------------------------
+# Gráfico 5: Razones de asignación automática
+# ---------------------------------------------------------------------------
 if not df_asig_t.empty and "reason" in df_asig_t.columns:
     reason_counts = df_asig_t["reason"].fillna("desconocido").value_counts()
     reason_df = reason_counts.reset_index()
