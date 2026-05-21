@@ -679,7 +679,7 @@ st.markdown(
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel mensual MX · contexto histórico (últimos 12 meses)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Funnel mensual MX · rango del filtro</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Funnel mensual MX · A control vs B tratamiento</h2>", unsafe_allow_html=True)
 
 try:
     df_monthly = load_funnel_monthly_mex(since_iso, until_iso)
@@ -687,19 +687,32 @@ except Exception as exc:
     df_monthly = pd.DataFrame()
     st.warning(f"BQ funnel mensual: {type(exc).__name__}: {exc}")
 
+# Helper: aclarar un color hex en N% para diferenciar control (claro) del
+# tratamiento (intenso) manteniendo la familia de color.
+def _lighten(hex_color: str, factor: float = 0.55) -> str:
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    r = int(r + (255 - r) * factor)
+    g = int(g + (255 - g) * factor)
+    b = int(b + (255 - b) * factor)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 if not df_monthly.empty:
-    # Stages a graficar (orden lógico del funnel)
+    # Stages a graficar (orden lógico del funnel). Color intenso = tratamiento.
     MONTHLY_STAGES = [
-        ("Cita Agendada (hubspot)",        "#ff6b6b"),
-        ("Cita Agendada",                  PRIMARY),
-        ("Visita Efectuada (hubspot)",     "#ff8c5a"),
-        ("Visita Efectuada",               "#4fb0c6"),
-        ("Pre-comite validado",            GREEN_LIGHT),
-        ("Aprobado General",               "#7f7f7f"),
-        ("Pendiente respuesta oferta",     GREEN_DARK),
+        ("Cita Agendada (hubspot)",         "#ff6b6b"),
+        ("Cita Agendada",                   PRIMARY),
+        ("Visita Efectuada (hubspot)",      "#ff8c5a"),
+        ("Visita Efectuada",                "#4fb0c6"),
+        ("Pre-comite validado",             GREEN_LIGHT),
+        ("Aprobado General",                "#7f7f7f"),
+        ("Pendiente respuesta oferta",      GREEN_DARK),
         ("Acepto Oferta - Pendiente firma", "#444"),
-        ("Cierre - Comprado",              "#e63946"),
-        ("Cierre  OCD",                    DEEP),
+        ("Cierre - Comprado",               "#e63946"),
+        ("Cierre  OCD",                     DEEP),
     ]
     df_monthly["mes_str"] = pd.to_datetime(df_monthly["mes"]).dt.strftime("%b %Y").str.lower()
     meses_ordenados = (
@@ -709,32 +722,63 @@ if not df_monthly.empty:
     )
 
     fig_monthly = go.Figure()
-    for stage, color in MONTHLY_STAGES:
+    for stage, color_dark in MONTHLY_STAGES:
         sub = df_monthly[df_monthly["valor"] == stage].copy()
         if sub.empty:
             continue
-        sub = sub.set_index("mes_str").reindex(meses_ordenados).reset_index()
-        sub["leads"] = sub["leads"].fillna(0).astype(int)
+        color_light = _lighten(color_dark, 0.55)
+
+        # Pivot: una fila por mes, columnas A y B
+        piv = (
+            sub.pivot_table(index="mes_str", columns="grupo", values="leads", aggfunc="sum")
+            .reindex(meses_ordenados)
+            .fillna(0)
+            .astype(int)
+        )
+        vals_a = piv.get("A", pd.Series(0, index=meses_ordenados)).tolist()
+        vals_b = piv.get("B", pd.Series(0, index=meses_ordenados)).tolist()
+
+        # Barra control (claro) abajo
         fig_monthly.add_trace(go.Bar(
-            x=sub["mes_str"], y=sub["leads"],
-            name=stage,
-            marker_color=color,
-            hovertemplate=f"<b>{stage}</b><br>%{{x}}<br>%{{y:,}} leads<extra></extra>",
+            x=meses_ordenados, y=vals_a,
+            name=f"{stage} · A",
+            marker_color=color_light,
+            legendgroup=stage, showlegend=True,
+            text=[f"{v:,}" if v > 0 else "" for v in vals_a],
+            textposition="outside",
+            textfont=dict(size=9, color=color_dark),
+            hovertemplate=f"<b>{stage} · Control</b><br>%{{x}}<br>%{{y:,}} leads<extra></extra>",
+            offsetgroup=stage,
         ))
+        # Barra tratamiento (intenso) encima
+        fig_monthly.add_trace(go.Bar(
+            x=meses_ordenados, y=vals_b,
+            name=f"{stage} · B",
+            marker_color=color_dark,
+            legendgroup=stage, showlegend=True,
+            text=[f"{v:,}" if v > 0 else "" for v in vals_b],
+            textposition="outside",
+            textfont=dict(size=9, color=DEEP),
+            hovertemplate=f"<b>{stage} · Tratamiento</b><br>%{{x}}<br>%{{y:,}} leads<extra></extra>",
+            offsetgroup=stage,
+        ))
+
     fig_monthly.update_layout(
-        barmode="group",
+        barmode="stack",
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=420,
+        height=520,
         margin=dict(l=10, r=10, t=10, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0,
+                    font=dict(size=9), traceorder="grouped"),
         xaxis=dict(title="Mes", gridcolor="#ede8f5", categoryorder="array",
                    categoryarray=meses_ordenados),
         yaxis=dict(title="Leads únicos", gridcolor="#ede8f5", tickformat=",d"),
+        uniformtext_minsize=8, uniformtext_mode="show",
     )
     st.plotly_chart(fig_monthly, use_container_width=True)
 else:
-    st.info("Sin datos del funnel mensual MX.")
+    st.info("Sin datos del funnel mensual MX en el rango seleccionado.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

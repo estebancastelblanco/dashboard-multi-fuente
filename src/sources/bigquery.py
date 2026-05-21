@@ -112,16 +112,18 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
 
     La ventaja vs construir esto desde la API de HubSpot es velocidad y
     completitud: no depende de paginar 9000+ deals.
+
+    Tanto el universo (createdate del deal) como el funnel (fecha de etapa)
+    respetan el rango [since_iso, until_iso].
     """
-    until_clause = ""
-    if until_iso:
-        until_clause = f"AND DATE(fecha) <= '{until_iso}'"
+    if not until_iso:
+        until_iso = "9999-12-31"
     sql = f"""
     WITH tratamiento_nids AS (
       SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
       WHERE LOWER(contacto_digital) = 'seller'
-        AND DATE(createdate) >= '{since_iso}'
+        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
         AND nid IS NOT NULL
     ),
     funnel AS (
@@ -130,28 +132,25 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
         valor,
         MIN(fecha) AS fecha
       FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
-      WHERE DATE(fecha) >= '{since_iso}'
-        {until_clause}
+      WHERE DATE(fecha) BETWEEN '{since_iso}' AND '{until_iso}'
       GROUP BY nid, valor
     ),
     universos AS (
-      -- Universo control = deals MX no-seller creados en la ventana
       SELECT
         CAST(nid AS INT64) AS nid,
         'A' AS grupo
       FROM `sellers-main-prod.hubspot.deals`
       WHERE LOWER(country) IN ('méxico', 'mexico')
         AND (LOWER(contacto_digital) != 'seller' OR contacto_digital IS NULL)
-        AND DATE(createdate) >= '{since_iso}'
+        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
         AND nid IS NOT NULL
       UNION ALL
-      -- Universo tratamiento = deals seller (=> contacto_digital='seller')
       SELECT
         CAST(nid AS INT64) AS nid,
         'B' AS grupo
       FROM `sellers-main-prod.hubspot.deals`
       WHERE LOWER(contacto_digital) = 'seller'
-        AND DATE(createdate) >= '{since_iso}'
+        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
         AND nid IS NOT NULL
     )
     SELECT
@@ -171,22 +170,35 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
 def fetch_funnel_monthly_mex(
     since_iso: str, until_iso: str | None = None,
 ) -> pd.DataFrame:
-    """Funnel MX agregado por mes en el rango pedido.
+    """Funnel MX agregado por mes y por grupo (A control / B tratamiento).
 
-    El rango lo controla el filtro de fechas del dashboard. Si el rango es
-    chico (~2 semanas) se ve un solo mes; si es amplio (~1 año) se ve la
-    evolución mensual completa.
+    Solo cuenta nids que pertenecen al experimento (deals creados en la
+    ventana, sea seller=B o no-seller=A), para que sea consistente con la
+    sección Comparativa A/B y la decisión del experimento.
+
+    Devuelve `mes, valor, grupo, leads`.
     """
-    until_clause = f"AND DATE(fecha) <= '{until_iso}'" if until_iso else ""
+    if not until_iso:
+        until_iso = "9999-12-31"
     sql = f"""
+    WITH nids_exp AS (
+      SELECT DISTINCT
+        CAST(nid AS INT64) AS nid,
+        CASE WHEN LOWER(contacto_digital) = 'seller' THEN 'B' ELSE 'A' END AS grupo
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE LOWER(country) IN ('méxico', 'mexico')
+        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
+        AND nid IS NOT NULL
+    )
     SELECT
-      DATE_TRUNC(DATE(fecha), MONTH) AS mes,
-      valor,
-      COUNT(DISTINCT nid) AS leads
-    FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
-    WHERE DATE(fecha) >= '{since_iso}'
-      {until_clause}
-    GROUP BY mes, valor
+      DATE_TRUNC(DATE(f.fecha), MONTH) AS mes,
+      f.valor,
+      e.grupo,
+      COUNT(DISTINCT f.nid) AS leads
+    FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex` f
+    INNER JOIN nids_exp e USING(nid)
+    WHERE DATE(f.fecha) BETWEEN '{since_iso}' AND '{until_iso}'
+    GROUP BY mes, f.valor, e.grupo
     ORDER BY mes, leads DESC
     """
     df = _client().query(sql).to_dataframe()
