@@ -424,13 +424,11 @@ n_preg = int((df_t_f["interaccion"] == "Tengo preguntas").sum())
 n_err = int((df_t_f["interaccion"] == "Error").sum())
 n_asig = int(df_t_f["asignado"].sum())
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.markdown(kpi_card("Universo", f"{n_universo:,}", f"Seller MX · {since_iso} → {until_iso}"), unsafe_allow_html=True)
-c2.markdown(kpi_card("Enviados WA", f"{n_wa:,}", f"{int(WA_DELIVERY*100)}% del universo"), unsafe_allow_html=True)
-c3.markdown(kpi_card("Abrieron link", f"{n_opened:,}", f"{n_opened/max(1,n_wa):.0%} de enviados"), unsafe_allow_html=True)
-c4.markdown(kpi_card("Asignados", f"{n_asig:,}", f"{n_asig/max(1,n_universo):.0%}"), unsafe_allow_html=True)
-c5.markdown(kpi_card("Quiero oferta", f"{n_oferta:,}", "CTA primario"), unsafe_allow_html=True)
-c6.markdown(kpi_card("Tengo preguntas", f"{n_preg:,}", "CTA secundario"), unsafe_allow_html=True)
+# Los KPIs descriptivos (Universo, Enviados WA, Abrieron link, Asignados,
+# Quiero oferta, Tengo preguntas) se omiten arriba a propósito: la información
+# vive en el embudo principal y se puede filtrar desde el sidebar. Las cifras
+# n_universo / n_wa / n_opened / n_asig / n_oferta / n_preg siguen calculadas
+# arriba porque los gráficos posteriores las consumen.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,29 +476,42 @@ stages = [
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
 f_sources = [s[2] for s in stages]
-fig_funnel = go.Figure(go.Funnel(
-    y=f_labels, x=f_vals,
-    textinfo="value+percent initial+percent previous",
-    textposition="inside",
-    textfont=dict(size=11, color="#fff"),
-    marker=dict(color=[
-        DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT,
-        "#bd8be3", PALE, GREEN_LIGHT, "#7eb37e", GREEN_DARK,
-    ][:len(stages)]),
+# Bar horizontal con escala log: cuando un paso tiene 500 y el siguiente 2, el
+# funnel tradicional aplasta visualmente las etapas finales. La escala log
+# preserva el contraste y permite ver el cierre incluso con 1 lead.
+palette = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE,
+           GREEN_LIGHT, "#7eb37e", GREEN_DARK]
+f_text = [
+    f"{v:,}" + (f"  ({v/f_vals[i-1]*100:.0f}% vs anterior · {v/f_vals[0]*100:.1f}% del universo)"
+                if i > 0 and f_vals[i-1] > 0 and f_vals[0] > 0 else "")
+    for i, v in enumerate(f_vals)
+]
+nonzero = [v for v in f_vals if v > 0]
+use_log = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
+fig_funnel = go.Figure(go.Bar(
+    x=f_vals, y=f_labels, orientation="h",
+    marker_color=palette[:len(stages)],
+    text=f_text,
+    textposition="outside", textfont=dict(size=11, color=DEEP),
     customdata=f_sources,
-    hovertemplate="<b>%{y}</b><br>%{x:,} leads<br>%{customdata}<extra></extra>",
-    connector=dict(line=dict(color=PALE, width=1)),
+    hovertemplate="<b>%{y}</b><br>%{x:,} leads · %{customdata}<extra></extra>",
 ))
 fig_funnel.update_layout(
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=520, margin=dict(l=10, r=10, t=10, b=10),
+    height=520, margin=dict(l=10, r=280, t=10, b=10),
+    xaxis=dict(
+        type="log" if use_log else "linear",
+        title="Leads" + (" (escala log)" if use_log else ""),
+        gridcolor="#ede8f5", tickformat=",d",
+    ),
+    yaxis=dict(autorange="reversed"),
 )
 st.plotly_chart(fig_funnel, use_container_width=True)
 st.caption(
-    "**% inicial** = vs el Universo · **% anterior** = conversión etapa→etapa. "
-    "Las interacciones CTA (Quiero oferta · Tengo preguntas) están en los KPIs "
-    "arriba y se filtran desde el sidebar."
+    "Eje X en escala logarítmica · cada barra muestra absoluto, conversión "
+    "etapa→etapa y % vs universo. Los CTA (Quiero oferta / Tengo preguntas) "
+    "están como filtro en el sidebar; no son etapas del funnel comercial."
 )
 
 
@@ -509,29 +520,30 @@ st.caption(
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Comparativa A/B · Control vs Tratamiento</h2>", unsafe_allow_html=True)
 st.caption(
-    "Control = leads MX con contacto_digital ≠ seller (gabi, chatbot, null), "
-    "filtrados a categoría B para comparabilidad. Tratamiento = seller (este experimento). "
+    "**A · Control** = leads MX con `contacto_digital ≠ seller` (gabi, chatbot, null) "
+    "— funnel completo de Habi sin filtrar por categoría comercial. "
+    "**B · Tratamiento** = `contacto_digital = seller` (este experimento). "
     "Las etapas se calculan sobre `seguimiento_funnel_mex` con los mismos filtros de fecha."
 )
 
-# Construir el conjunto de nids del control (categoría B equivalente).
-# Filtramos en cliente porque la API HS no expone categoria_comercial directo
-# con consistencia → usamos prioridad_gestion_mm == 'B' como proxy del doc.
-df_c_b = pd.DataFrame()
+# Construir el conjunto de nids del control SIN filtrar por categoría: queremos
+# el funnel completo de Habi (excluyendo el tratamiento). El user lo pidió así
+# en lugar del filtrado a 'prioridad_gestion_market_maker == B' que sesgaba el
+# control a apenas un puñado de leads.
+df_c_full = pd.DataFrame()
 if not df_c.empty:
-    df_c_b = df_c[df_c["prioridad_gestion_market_maker"].astype(str).str.upper() == "B"].copy()
-    # nid mapping para control
-    uuids_c = tuple(sorted(df_c_b["deal_uuid"].dropna().astype(str).str.lower().unique().tolist()))
+    df_c_full = df_c.copy()
+    uuids_c = tuple(sorted(df_c_full["deal_uuid"].dropna().astype(str).str.lower().unique().tolist()))
     if uuids_c:
         try:
             df_nid_c = load_nid_mapping(uuids_c)
-            df_c_b["deal_uuid_lc"] = df_c_b["deal_uuid"].astype(str).str.lower()
+            df_c_full["deal_uuid_lc"] = df_c_full["deal_uuid"].astype(str).str.lower()
             df_nid_c["deal_uuid_lc"] = df_nid_c["deal_uuid"].astype(str).str.lower()
-            df_c_b = df_c_b.merge(df_nid_c[["deal_uuid_lc", "nid"]], on="deal_uuid_lc", how="left", suffixes=("_hs", ""))
+            df_c_full = df_c_full.merge(df_nid_c[["deal_uuid_lc", "nid"]], on="deal_uuid_lc", how="left", suffixes=("_hs", ""))
         except Exception:
-            df_c_b["nid"] = None
+            df_c_full["nid"] = None
 
-nids_c = set(df_c_b["nid"].dropna().astype(int).tolist()) if "nid" in df_c_b.columns else set()
+nids_c = set(df_c_full["nid"].dropna().astype(int).tolist()) if "nid" in df_c_full.columns else set()
 
 try:
     df_funnel_c = load_funnel_mex(tuple(nids_c), since_iso, until_iso) if nids_c else pd.DataFrame()
@@ -572,7 +584,7 @@ def _build_funnel_counts(df_fun: pd.DataFrame, nids: set, universe: int) -> list
 
 
 vals_t = _build_funnel_counts(df_funnel, nids_f, n_universo)
-vals_c = _build_funnel_counts(df_funnel_c, nids_c, len(df_c_b))
+vals_c = _build_funnel_counts(df_funnel_c, nids_c, len(df_c_full))
 
 col_c, col_t = st.columns(2)
 labels = [s[0] for s in COMPARE_STAGES]
@@ -610,7 +622,7 @@ PALETTE_TRATAMIENTO = [GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
                        "#7eb37e", GREEN_LIGHT, "#cce4ce"]
 with col_c:
     st.plotly_chart(
-        _funnel_chart(vals_c, "A · Control (B sin pre-oferta)", PALETTE_CONTROL),
+        _funnel_chart(vals_c, "A · Control (sin pre-oferta)", PALETTE_CONTROL),
         use_container_width=True,
     )
 with col_t:
@@ -651,61 +663,11 @@ st.caption(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Distribuciones
+# Split A/B · 95/5
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Distribuciones</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Split A/B · Control vs Tratamiento</h2>", unsafe_allow_html=True)
 
-col_int, col_estado, col_owner = st.columns(3)
-
-
-def _hbar(series: pd.Series, title: str, palette_start: str, palette_end: str, top: int = 10):
-    c = series.fillna("(sin valor)").astype(str).replace("", "(sin valor)").value_counts().reset_index()
-    c.columns = ["cat", "N"]
-    c = c.head(top).sort_values("N", ascending=True)
-    fig = go.Figure(go.Bar(
-        x=c["N"], y=c["cat"], orientation="h",
-        marker=dict(
-            color=c["N"],
-            colorscale=[[0, palette_start], [1, palette_end]],
-            showscale=False,
-        ),
-        text=c["N"], textposition="outside", textfont_size=10,
-    ))
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
-        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-        font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=max(260, len(c) * 24 + 80),
-        margin=dict(l=10, r=50, t=44, b=10),
-        yaxis=dict(gridcolor="#ede8f5"),
-        xaxis=dict(gridcolor="#ede8f5"),
-    )
-    return fig
-
-
-with col_int:
-    st.plotly_chart(
-        _hbar(df_t_f["interaccion"], "Interacción post-apertura (jerárquica)", PALE, PRIMARY, top=4),
-        use_container_width=True,
-    )
-
-with col_estado:
-    if "dealstage" in df_t_f.columns:
-        st.plotly_chart(
-            _hbar(df_t_f["dealstage"], "Estado del negocio (top 10)", PALE, MED),
-            use_container_width=True,
-        )
-
-with col_owner:
-    # owner_label ya viene cacheado desde enrich_deals_df
-    st.plotly_chart(
-        _hbar(df_t_f["owner_label"], "Comerciales (top 10)", PALE, ACCENT),
-        use_container_width=True,
-    )
-
-
-# Pie control vs tratamiento (95/5)
-col_ab, col_cat = st.columns(2)
+col_ab, _col_filler = st.columns([1, 1])
 with col_ab:
     n_t_total = len(df_t)
     n_c_total = len(df_c)
@@ -713,62 +675,35 @@ with col_ab:
     if total > 0:
         share_t = n_t_total / total * 100
         share_c = n_c_total / total * 100
-        # Bar chart horizontal apilado: mucho mas legible que un pie cuando
-        # las proporciones son extremas (95/5).
-        fig_ab = go.Figure()
-        fig_ab.add_trace(go.Bar(
-            x=[n_c_total], y=["Split"], orientation="h",
-            marker_color=PRIMARY,
-            text=[f"Control · {n_c_total:,} ({share_c:.1f}%)"],
-            textposition="inside", textfont=dict(color="#fff", size=12),
-            name="Control (no-Seller)",
-            hovertemplate="Control: %{x:,} (%{customdata:.1f}%)<extra></extra>",
-            customdata=[share_c],
-        ))
-        fig_ab.add_trace(go.Bar(
-            x=[n_t_total], y=["Split"], orientation="h",
-            marker_color=GREEN_DARK,
-            text=[f"Tratamiento · {n_t_total:,} ({share_t:.1f}%)"],
-            textposition="inside", textfont=dict(color="#fff", size=12),
-            name="Tratamiento (Seller)",
-            hovertemplate="Tratamiento: %{x:,} (%{customdata:.1f}%)<extra></extra>",
-            customdata=[share_t],
+        # Pie donut, ordenando tratamiento PRIMERO con rotación 270° para que
+        # el slice pequeño (verde) quede arriba-izquierda y el label se lea
+        # sin tocar el borde del contenedor.
+        fig_ab = go.Figure(go.Pie(
+            labels=["Tratamiento (Seller)", "Control (no-Seller)"],
+            values=[n_t_total, n_c_total],
+            hole=0.5,
+            sort=False,
+            direction="clockwise",
+            rotation=-90,  # tratamiento sale en la zona superior-izquierda
+            marker_colors=[GREEN_DARK, PRIMARY],
+            textinfo="label+percent+value",
+            textfont=dict(size=11, color="#fff"),
+            textposition="inside",
+            insidetextorientation="horizontal",
+            hovertemplate="<b>%{label}</b><br>%{value:,} leads · %{percent}<extra></extra>",
         ))
         target_line = f"Target 95/5 · actual {share_c:.1f}/{share_t:.1f}"
         fig_ab.update_layout(
-            barmode="stack",
-            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-            showlegend=False,
+            paper_bgcolor=WHITE, showlegend=False,
             title=dict(text=f"Split A/B · {target_line}",
                        font=dict(size=13, color=DEEP, family="Inter")),
-            height=180, margin=dict(l=5, r=5, t=44, b=10),
-            xaxis=dict(visible=False, showgrid=False),
-            yaxis=dict(visible=False),
+            height=320, margin=dict(l=5, r=5, t=44, b=5),
         )
         st.plotly_chart(fig_ab, use_container_width=True)
         st.caption(
             f"Universo total {total:,} leads MX en {since_iso} → {until_iso}. "
             f"Tratamiento (seller) {share_t:.2f}% vs Control (no-seller) {share_c:.2f}%."
         )
-
-with col_cat:
-    if "prioridad_gestion_market_maker" in df_t_f.columns:
-        cat_counts = (
-            df_t_f["prioridad_gestion_market_maker"].fillna("(sin asignar)").astype(str)
-            .value_counts().reset_index()
-        )
-        cat_counts.columns = ["Categoría", "N"]
-        fig_cat = go.Figure(go.Pie(
-            labels=cat_counts["Categoría"], values=cat_counts["N"],
-            hole=0.42, marker_colors=[ACCENT, PRIMARY, MED, GREY],
-            textinfo="label+percent+value", textfont_size=11,
-        ))
-        fig_cat.update_layout(
-            paper_bgcolor=WHITE, showlegend=False,
-            title=dict(text="Categoría comercial (tratamiento)", font=dict(size=13, color=DEEP)),
-            height=320, margin=dict(l=5, r=5, t=44, b=5),
-        )
-        st.plotly_chart(fig_cat, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1009,34 +944,80 @@ with side_col:
 
 
 def _kanban_card(row) -> str:
+    """Card estilo Pipefy/Trello: ID grande, estado, envios, dias sin asignar.
+
+    Diseño:
+      - Header: deal_id (#xxxx) + badge dias (rojo si urgente, gris si no)
+      - Body: estado del negocio (label legible) + nombre breve
+      - Footer: chip envíos + chip interaccion + tel breve
+    """
     dias = float(row.get("dias_desde_creacion") or 0)
     urgent = dias >= MAX_DIAS_SIN_ASIGNAR
-    accent = RED if urgent else PRIMARY
-    bg = "#fff5f5" if urgent else WHITE
-    name = str(row.get("dealname") or "(sin nombre)")[:42]
+    border_color = RED if urgent else MED
+    bg_color = "#fff7f7" if urgent else WHITE
+    name = str(row.get("dealname") or "(sin nombre)")[:38]
+    deal_id = str(row.get("hs_object_id") or "")
+    estado_label = str(row.get("estado_label") or "—")
     flag = int(row.get("preofertaflag1") or 0)
     inter = str(row.get("interaccion") or "")
-    inter_badge = ""
+    phone = str(row.get("phone") or "").strip()
+    phone_short = phone[-10:] if len(phone) >= 10 else (phone or "—")
+
+    # Badge de dias
+    days_bg = RED if urgent else "#eee5fa"
+    days_fg = WHITE if urgent else DEEP
+    days_text = f"{dias:.1f}d" + (" URG" if urgent else "")
+
+    # Badge de envios
+    envios_color = GREEN_DARK if flag >= 1 else "#9aa0a6"
+    envios_text = f"{flag}/{MAX_ENVIOS}" if flag >= 1 else "Sin enviar"
+    envios_icon = "✉" if flag >= 1 else "✗"
+
+    # Badge de interaccion
+    inter_html = ""
     if inter == "Quiero oferta":
-        inter_badge = f"<span style='background:{GREEN_DARK};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>oferta</span>"
+        inter_html = (f"<span style='background:{GREEN_DARK};color:#fff;padding:2px 7px;"
+                      f"border-radius:10px;font-size:0.65rem;font-weight:600'>oferta</span>")
     elif inter == "Tengo preguntas":
-        inter_badge = f"<span style='background:{ACCENT};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>preguntas</span>"
+        inter_html = (f"<span style='background:{ACCENT};color:#fff;padding:2px 7px;"
+                      f"border-radius:10px;font-size:0.65rem;font-weight:600'>preguntas</span>")
     elif inter == "Error":
-        inter_badge = f"<span style='background:{RED};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;margin-left:4px'>error</span>"
-    urgent_badge = (
-        f"<span style='background:{RED};color:#fff;padding:2px 6px;border-radius:8px;font-size:0.65rem;font-weight:700;margin-left:4px'>URG</span>"
-        if urgent else ""
-    )
-    phone = str(row.get("phone") or "").strip() or "—"
+        inter_html = (f"<span style='background:{RED};color:#fff;padding:2px 7px;"
+                      f"border-radius:10px;font-size:0.65rem;font-weight:600'>error</span>")
+
     return (
-        f"<div style='background:{bg};border-left:3px solid {accent};"
-        f"border-radius:6px;padding:8px 10px;margin-bottom:8px;"
-        f"box-shadow:0 1px 3px rgba(46,17,71,0.07);font-size:0.78rem;color:{DEEP}'>"
-        f"<div style='font-weight:600;line-height:1.3;margin-bottom:4px'>"
-        f"{name}{urgent_badge}{inter_badge}</div>"
-        f"<div style='color:#666;font-size:0.7rem'>"
-        f"📅 {dias:.1f}d &nbsp;·&nbsp; ✉️ {flag}/{MAX_ENVIOS} envíos &nbsp;·&nbsp; 📞 {phone}"
+        f"<div style='background:{bg_color};border:1px solid #ece4f6;"
+        f"border-left:3px solid {border_color};border-radius:8px;"
+        f"padding:10px 12px;margin-bottom:8px;"
+        f"box-shadow:0 1px 4px rgba(46,17,71,0.06);"
+        f"color:{DEEP};font-size:0.78rem'>"
+
+        # Header: deal_id + dias
+        f"<div style='display:flex;justify-content:space-between;align-items:center;"
+        f"margin-bottom:6px'>"
+        f"<div style='font-family:monospace;color:{MED};font-size:0.7rem;font-weight:600'>"
+        f"#{deal_id}</div>"
+        f"<div style='background:{days_bg};color:{days_fg};padding:2px 7px;"
+        f"border-radius:10px;font-size:0.65rem;font-weight:700'>{days_text}</div>"
         f"</div>"
+
+        # Nombre del lead
+        f"<div style='font-weight:600;font-size:0.85rem;line-height:1.25;"
+        f"margin-bottom:6px;color:{DEEP}'>{name}</div>"
+
+        # Estado (label)
+        f"<div style='background:{PALE};color:{DEEP};padding:3px 8px;"
+        f"border-radius:6px;font-size:0.7rem;font-weight:500;"
+        f"display:inline-block;margin-bottom:8px'>● {estado_label}</div>"
+
+        # Footer chips
+        f"<div style='display:flex;gap:6px;align-items:center;flex-wrap:wrap'>"
+        f"<span style='background:{envios_color};color:#fff;padding:2px 7px;"
+        f"border-radius:10px;font-size:0.65rem;font-weight:600'>{envios_icon} {envios_text}</span>"
+        f"{inter_html}"
+        f"<span style='color:#888;font-size:0.65rem;margin-left:auto'>📞 {phone_short}</span>"
+        f"</div>"
+
         f"</div>"
     )
 
@@ -1051,27 +1032,38 @@ with board_col:
     else:
         board_cols = st.columns(len(cols_order))
         for (code, label), col in zip(cols_order, board_cols):
-            sub = df_kanban[df_kanban["estado_code"] == code]
+            sub = df_kanban[df_kanban["estado_code"] == code].sort_values(
+                "dias_desde_creacion", ascending=False
+            )
             n_col = len(sub)
             n_urg_col = int((sub["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
             with col:
-                # Header columna
                 accent = RED if n_urg_col > 0 else PRIMARY
+                # Header columna con contador y porcentaje del filtro
+                pct_col = n_col / max(1, n_kanban) * 100
                 st.markdown(
                     f"<div style='background:{DEEP};color:#fff;"
-                    f"padding:8px 10px;border-radius:6px;margin-bottom:10px;"
-                    f"border-top:3px solid {accent}'>"
-                    f"<div style='font-size:0.8rem;font-weight:700;line-height:1.2'>{label}</div>"
-                    f"<div style='font-size:0.7rem;opacity:0.85;margin-top:2px'>"
-                    f"{n_col} deals · {n_urg_col} urgentes</div>"
+                    f"padding:10px 12px;border-radius:8px 8px 0 0;"
+                    f"border-bottom:3px solid {accent};margin-bottom:10px'>"
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"align-items:flex-start;gap:8px'>"
+                    f"<div style='font-size:0.78rem;font-weight:700;"
+                    f"line-height:1.2;flex:1'>{label}</div>"
+                    f"<div style='background:{accent};color:#fff;padding:1px 7px;"
+                    f"border-radius:10px;font-size:0.7rem;font-weight:700'>{n_col}</div>"
+                    f"</div>"
+                    f"<div style='font-size:0.65rem;opacity:0.8;margin-top:4px;"
+                    f"letter-spacing:.04em'>{pct_col:.0f}% del filtro · "
+                    f"{n_urg_col} urgentes</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                # Cards
                 if n_col == 0:
                     st.markdown(
-                        f"<div style='color:{MED};font-size:0.72rem;font-style:italic;"
-                        f"padding:6px 4px'>Sin deals</div>",
+                        f"<div style='background:{WHITE};border:1px dashed #d9cfee;"
+                        f"border-radius:8px;color:{MED};font-size:0.72rem;"
+                        f"font-style:italic;padding:14px;text-align:center'>"
+                        f"Sin deals en este estado</div>",
                         unsafe_allow_html=True,
                     )
                 else:
@@ -1080,145 +1072,12 @@ with board_col:
                     )
                     st.markdown(cards_html, unsafe_allow_html=True)
                     if n_col > 40:
-                        st.caption(f"+{n_col - 40} más…")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Asignados · funnel del Market Maker (pipeline destino)
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Asignados · funnel del Market Maker</h2>", unsafe_allow_html=True)
-st.caption(
-    f"Deals que ya fueron movidos al pipeline destino "
-    f"`{PIPELINE_DESTINO}` (Sellers - Market Maker MX). "
-    "Permite ver cómo van avanzando los leads asignados etapa por etapa."
-)
-
-# Stages principales del pipeline destino (orden lógico del funnel comercial)
-# Codigos verificados con GET /pipelines/deals/731899270.
-ASIGNADOS_STAGES: list[tuple[str, str]] = [
-    ("1066429804", "Asignado"),
-    ("1068448315", "1er intento de contacto"),
-    ("1066429805", "Perfilado"),
-    ("1066429808", "Agendado"),
-    ("1066429809", "Visitado"),
-    ("1066441576", "Enviado a comité"),
-    ("1066441579", "Aprobados"),
-    ("1066441580", "Ofertados"),
-    ("1066441581", "Ofertas aceptadas"),
-    ("1066441593", "Firmado"),
-]
-# Side-states que sacan al lead del flujo principal (no son etapas avanzadas).
-LEAK_STAGES: list[tuple[str, str]] = [
-    ("1066429806", "Visita cancelada"),
-    ("1089120851", "Regestión"),
-    ("1066441594", "Perdido"),
-]
-
-df_asignados = df_t[df_t["pipeline"].astype(str) == PIPELINE_DESTINO].copy()
-n_asignados = len(df_asignados)
-
-# Distribución actual por stage (todos los stages del pipeline destino)
-stage_counts_raw = df_asignados["dealstage"].astype(str).value_counts() if n_asignados else pd.Series(dtype=int)
-
-funnel_vals = [int(stage_counts_raw.get(code, 0)) for code, _ in ASIGNADOS_STAGES]
-funnel_labels = [label for _, label in ASIGNADOS_STAGES]
-leak_vals = [int(stage_counts_raw.get(code, 0)) for code, _ in LEAK_STAGES]
-
-# Calcular cuántos están "más adelante o igual a este stage" = funnel acumulado
-funnel_acum = []
-acumulado = 0
-for i in reversed(range(len(funnel_vals))):
-    acumulado += funnel_vals[i]
-    funnel_acum.append(acumulado)
-funnel_acum = list(reversed(funnel_acum))
-
-# Stages "fuera de ASIGNADOS_STAGES y fuera de LEAK_STAGES" (avanzados o intermedios no listados)
-known_codes = {c for c, _ in ASIGNADOS_STAGES} | {c for c, _ in LEAK_STAGES}
-otros = int(stage_counts_raw[~stage_counts_raw.index.isin(known_codes)].sum())
-
-avanzaron = sum(funnel_vals[1:]) + otros  # cualquiera mas alla de Asignado
-cvr_avance = (avanzaron / n_asignados * 100) if n_asignados else 0.0
-
-# KPIs
-ka1, ka2, ka3, ka4 = st.columns(4)
-ka1.markdown(kpi_card("Total asignados", f"{n_asignados:,}",
-                      "pipeline destino · Market Maker MX"),
-             unsafe_allow_html=True)
-ka2.markdown(kpi_card("Avanzaron post-asignación", f"{avanzaron:,}",
-                      f"{cvr_avance:.1f}% · más allá de 'Asignado'"),
-             unsafe_allow_html=True)
-ka3.markdown(kpi_card("En 'Asignado'", f"{funnel_vals[0]:,}",
-                      "stage inicial · esperando primer contacto"),
-             unsafe_allow_html=True)
-ka4.markdown(kpi_card("Side / Perdidos", f"{sum(leak_vals):,}",
-                      "cancelada, regestion o perdido"),
-             unsafe_allow_html=True)
-
-# Funnel horizontal con barras: ACUMULADO (≥ stage) + ACTUAL (en stage exacto)
-if n_asignados > 0:
-    fig_fa = go.Figure()
-    fig_fa.add_trace(go.Bar(
-        x=funnel_acum, y=funnel_labels, orientation="h",
-        marker_color=PALE,
-        text=[f"{v:,}" + (f"  ({v/funnel_acum[0]*100:.0f}%)" if funnel_acum[0] > 0 and i > 0 else "")
-              for i, v in enumerate(funnel_acum)],
-        textposition="outside", textfont=dict(size=10, color=MED),
-        name="Acumulado (≥ este stage)",
-        hovertemplate="%{y} acumulado: %{x:,}<extra></extra>",
-    ))
-    fig_fa.add_trace(go.Bar(
-        x=funnel_vals, y=funnel_labels, orientation="h",
-        marker_color=GREEN_DARK,
-        text=[f"{v:,}" for v in funnel_vals],
-        textposition="inside", textfont=dict(size=10, color="#fff"),
-        name="Actualmente en este stage",
-        hovertemplate="%{y} ahora: %{x:,}<extra></extra>",
-    ))
-    fig_fa.update_layout(
-        barmode="overlay",
-        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-        height=420, margin=dict(l=10, r=120, t=40, b=10),
-        xaxis=dict(title="Deals", gridcolor="#ede8f5", tickformat=",d"),
-        yaxis=dict(autorange="reversed"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
-    )
-    st.plotly_chart(fig_fa, use_container_width=True)
-
-    # Lista detallada de asignados con dias en stage actual
-    df_asignados_show = df_asignados.copy()
-    # Dias desde la asignacion (usamos hs_lastmodifieddate como proxy de cambio de stage,
-    # idealmente vendria de un histo de cambios pero no lo tenemos aqui)
-    df_asignados_show["dias_en_pipeline"] = df_asignados_show["dias_desde_creacion"].astype(float)
-    # Decodear stage label
-    df_asignados_show["stage_label"] = df_asignados_show["dealstage"].astype(str).map(
-        dict(ASIGNADOS_STAGES + LEAK_STAGES)
-    ).fillna("Otro stage")
-    df_asignados_show = df_asignados_show.sort_values("dias_en_pipeline", ascending=False)
-
-    show_a = [
-        ("dealname",          "Nombre"),
-        ("stage_label",       "Stage actual"),
-        ("dias_en_pipeline",  "Días en pipeline"),
-        ("preofertaflag1",    "Envíos WA"),
-        ("interaccion",       "Interacción"),
-        ("owner_label",       "Comercial"),
-        ("phone",             "Teléfono"),
-        ("hs_object_id",      "deal_id"),
-        ("deal_uuid",         "deal_uuid"),
-    ]
-    present_a = [(s, l) for s, l in show_a if s in df_asignados_show.columns]
-    df_a_display = df_asignados_show[[s for s, _ in present_a]].rename(columns=dict(present_a))
-    if "Días en pipeline" in df_a_display.columns:
-        df_a_display["Días en pipeline"] = df_a_display["Días en pipeline"].astype(float).round(1)
-    with st.expander(f"Ver listado completo de {n_asignados} asignados", expanded=False):
-        st.dataframe(df_a_display, hide_index=True, use_container_width=True)
-else:
-    st.info(
-        "Aún no hay deals asignados al Market Maker en el rango. "
-        "Cuando un cliente clickee 'Quiero oferta' / 'Tengo preguntas' o el cron del día 4 "
-        "actúe, aparecerán acá."
-    )
+                        st.markdown(
+                            f"<div style='text-align:center;color:{MED};"
+                            f"font-size:0.7rem;font-style:italic;padding:4px'>"
+                            f"+ {n_col - 40} deals más</div>",
+                            unsafe_allow_html=True,
+                        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
