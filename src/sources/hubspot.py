@@ -189,6 +189,7 @@ PREOFERTA_PROPS: dict[str, str] = {
     "quiero_recibir_oferta_formal":     "Quiero recibir oferta formal",
     "tengo_preguntas":                  "Tengo preguntas",
     "error_preoferta":                  "Error pre-oferta",
+    "preofertaflag1":                   "Pre-oferta · envios realizados",
     "phone":                            "Teléfono",
     "precio_maximo_prestamo":           "Precio máximo préstamo",
     "hubspot_owner_id":                 "Propietario del negocio",
@@ -245,7 +246,8 @@ def fetch_preoferta_deals(
     df = pd.DataFrame(rows, columns=properties)
     if "createdate" in df.columns:
         df["createdate"] = pd.to_datetime(df["createdate"], errors="coerce")
-    for col in ("quiero_recibir_oferta_formal", "tengo_preguntas", "error_preoferta"):
+    for col in ("quiero_recibir_oferta_formal", "tengo_preguntas", "error_preoferta",
+                "preofertaflag1"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
     return df

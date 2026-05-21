@@ -19,6 +19,7 @@ def _bootstrap_from_st_secrets() -> None:
         "GOOGLE_SHEETS_CREDENTIALS",
         "BQ_PROJECT_ID", "BQ_DATASET_PROJECT", "BQ_DATASET", "BQ_TABLE",
         "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+        "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY",
     ]
     try:
         for k in keys:
@@ -35,12 +36,14 @@ from src.experiments import REGISTRY
 from src.sources import bigquery as bq_src
 from src.sources import gsheets as gs_src
 from src.sources import hubspot as hs_src
+from src.sources import supabase as sb_src
 
 # Streamlit Cloud retiene sys.modules entre reruns; tras un deploy con cambios
 # en src/sources, fuerza una recarga para que las nuevas firmas se vean.
 hs_src = importlib.reload(hs_src)
 bq_src = importlib.reload(bq_src)
 gs_src = importlib.reload(gs_src)
+sb_src = importlib.reload(sb_src)
 from src.styling import (
     inject_base_css, kpi_card,
     DEEP, PRIMARY, MED, ACCENT, LIGHT, PALE, WHITE,
@@ -67,6 +70,13 @@ START_DATE = EXPERIMENT.start_date
 WA_DELIVERY = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.80)
 LANDING_SHEET_ID = EXPERIMENT.funnel_baseline.get("landing_sheet_id")
 JUAN_OWNER_EMAIL = "juanquinones@habi.co"
+
+# Pipelines del experimento (Sellers MX → Market Maker MX NUEVO)
+PIPELINE_ORIGEN = "15290604"     # Sellers MX (donde nacen los deals)
+PIPELINE_DESTINO = "731899270"   # Sellers - Market Maker MX (NUEVO) — meta
+DEALSTAGE_ASIGNADO = "1066429804"
+MAX_DIAS_SIN_ASIGNAR = 4         # del diseño: si pasaron 4 dias debe asignarse si o si
+MAX_ENVIOS = 4                   # workflow HubSpot manda 4 plantillas (dia 1..4)
 
 
 UUID_RX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
@@ -147,20 +157,32 @@ def enrich_deals_df(
     """Calcula columnas derivadas pesadas (interacción, asignación, abrió link)
     una sola vez por (df, mapas) y las cachea en memoria. Evita reprocesar
     269+ filas con apply en cada rerun.
+
+    Definicion vigente de 'asignado' (post EXP-003 lanzamiento):
+        pipeline == PIPELINE_DESTINO ("Sellers - Market Maker MX (NUEVO)")
+    porque la asignacion automatica al MM (juanquinones@habi.co) mueve
+    el deal a ese pipeline + stage Asignado + prioridad B.
     """
     df = df.copy()
     df["interaccion"] = df.apply(_interaccion, axis=1)
     df["owner_email"] = df["hubspot_owner_id"].astype(str).map(owner_email_map).fillna("")
-    df["asignado"] = (
-        df["hubspot_owner_id"].notna()
-        & (df["owner_email"].astype(str).str.lower() != juan_email)
-        & df["prioridad_gestion_market_maker"].fillna("").astype(str).str.strip().ne("")
-    )
+    df["asignado"] = df["pipeline"].astype(str) == PIPELINE_DESTINO
     df["asignacion_label"] = df["asignado"].map({True: "Asignado", False: "No asignado"})
     df["abrió_link"] = df["deal_uuid"].astype(str).str.lower().isin(opened_uuids)
     df["owner_label"] = df["hubspot_owner_id"].astype(str).map(
         lambda oid: owner_email_map.get(oid, oid) if oid and oid != "nan" else "(sin owner)"
     )
+    # Dias desde createdate (UTC vs UTC) — util para alerta de >4 dias sin asignar
+    if "createdate" in df.columns:
+        now = pd.Timestamp.now(tz="UTC")
+        cd = pd.to_datetime(df["createdate"], errors="coerce", utc=True)
+        df["dias_desde_creacion"] = (now - cd).dt.total_seconds() / 86400.0
+    else:
+        df["dias_desde_creacion"] = pd.NA
+    if "preofertaflag1" in df.columns:
+        df["preofertaflag1"] = pd.to_numeric(df["preofertaflag1"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["preofertaflag1"] = 0
     return df
 
 
@@ -173,6 +195,33 @@ def _interaccion(row) -> str:
     if int(row.get("error_preoferta", 0) or 0) > 0:
         return "Error"
     return "Sin interacción"
+
+
+@st.cache_data(ttl=SHORT, show_spinner="Supabase · envios WA…")
+def load_whatsapp_sends(since_iso: str, until_iso: str) -> pd.DataFrame:
+    try:
+        return sb_src.fetch_whatsapp_sends(since_iso, until_iso)
+    except Exception as exc:
+        st.warning(f"Supabase whatsapp_sends: {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=SHORT, show_spinner="Supabase · interacciones CTAs…")
+def load_deal_interactions(since_iso: str, until_iso: str) -> pd.DataFrame:
+    try:
+        return sb_src.fetch_deal_interactions(since_iso, until_iso)
+    except Exception as exc:
+        st.warning(f"Supabase deal_interactions: {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=SHORT, show_spinner="Supabase · asignaciones automaticas…")
+def load_deal_assignments(since_iso: str, until_iso: str) -> pd.DataFrame:
+    try:
+        return sb_src.fetch_deal_assignments(since_iso, until_iso)
+    except Exception as exc:
+        st.warning(f"Supabase deal_assignments: {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · catálogo owners…", persist="disk")
@@ -307,6 +356,11 @@ try:
 except Exception as exc:
     df_funnel = pd.DataFrame()
     st.warning(f"BQ funnel: {type(exc).__name__}: {exc}")
+
+# Tablas Supabase (envios WA, interacciones, asignaciones)
+df_sends = load_whatsapp_sends(since_iso, until_iso)
+df_interactions = load_deal_interactions(since_iso, until_iso)
+df_assignments = load_deal_assignments(since_iso, until_iso)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -725,6 +779,228 @@ with st.expander("Cómo se calculan estos umbrales"):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Evolución de los 4 envíos · plantilla WhatsApp
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Evolución de los 4 envíos · plantilla WhatsApp</h2>", unsafe_allow_html=True)
+st.caption(
+    "Cuántos leads están esperando o ya recibieron cada uno de los 4 envíos. "
+    "La flag `preofertaflag1` en HubSpot se incrementa después de cada envío "
+    "(workflow Infobip → /api/whatsapp/sent). 0 = aún sin enviar el primero."
+)
+
+flag_series = (
+    df_t_f["preofertaflag1"].fillna(0).astype(int).clip(lower=0, upper=MAX_ENVIOS)
+)
+flag_counts = flag_series.value_counts().reindex(range(0, MAX_ENVIOS + 1), fill_value=0)
+
+LABELS_FLAG = {
+    0: "Sin enviar",
+    1: "Recibió 1 · esperando 2",
+    2: "Recibió 2 · esperando 3",
+    3: "Recibió 3 · esperando 4",
+    4: "Recibió los 4",
+}
+
+env_cols = st.columns(MAX_ENVIOS + 1)
+for i, col in enumerate(env_cols):
+    col.markdown(
+        kpi_card(LABELS_FLAG[i], f"{int(flag_counts.get(i, 0)):,}",
+                 "preofertaflag1 = " + str(i)),
+        unsafe_allow_html=True,
+    )
+
+# Bar chart horizontal con gradiente
+flag_labels = [LABELS_FLAG[i] for i in range(0, MAX_ENVIOS + 1)]
+flag_vals = [int(flag_counts.get(i, 0)) for i in range(0, MAX_ENVIOS + 1)]
+flag_colors = [LIGHT, PALE, MED, PRIMARY, DEEP]
+fig_envios = go.Figure(go.Bar(
+    x=flag_vals, y=flag_labels, orientation="h",
+    marker_color=flag_colors,
+    text=[f"{v:,}" for v in flag_vals], textposition="outside",
+    textfont=dict(size=11, color=DEEP),
+))
+fig_envios.update_layout(
+    paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+    height=260, margin=dict(l=10, r=80, t=10, b=10),
+    xaxis=dict(title="Leads", gridcolor="#ede8f5", tickformat=",d"),
+    yaxis=dict(autorange="reversed"),
+)
+st.plotly_chart(fig_envios, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline de no-asignados · alerta de >4 días sin asignación al MM
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown(
+    f"<h2>Pipeline de no-asignados · alerta &gt; {MAX_DIAS_SIN_ASIGNAR} días</h2>",
+    unsafe_allow_html=True,
+)
+st.caption(
+    f"Deals seller en pipeline ORIGEN ({PIPELINE_ORIGEN}) que aún no fueron "
+    f"movidos al pipeline destino ({PIPELINE_DESTINO} · Market Maker MX). "
+    f"Cuando un lead supera los {MAX_DIAS_SIN_ASIGNAR} días sin asignar, "
+    "el cron diario lo asigna automáticamente; si no, se requiere acción manual."
+)
+
+# IMPORTANTE: para esta seccion ignoramos los filtros del sidebar de
+# 'asignacion' y 'cta' — queremos ver TODO lo no asignado, no lo filtrado.
+df_no_asig = df_t[df_t["pipeline"].astype(str) == PIPELINE_ORIGEN].copy()
+df_no_asig = df_no_asig.sort_values("dias_desde_creacion", ascending=False)
+
+n_no_asig = len(df_no_asig)
+n_urgentes = int((df_no_asig["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
+n_pendientes = n_no_asig - n_urgentes
+prom_dias_no_asig = float(df_no_asig["dias_desde_creacion"].mean()) if n_no_asig else 0.0
+
+na_c1, na_c2, na_c3, na_c4 = st.columns(4)
+na_c1.markdown(kpi_card("Total no asignados", f"{n_no_asig:,}",
+                        f"pipeline = {PIPELINE_ORIGEN}"), unsafe_allow_html=True)
+na_c2.markdown(_alarm_card(
+    f"Urgentes (≥ {MAX_DIAS_SIN_ASIGNAR}d)",
+    f"{n_urgentes:,}",
+    "deben asignarse hoy",
+    n_urgentes > 0,
+), unsafe_allow_html=True)
+na_c3.markdown(kpi_card("Dentro de ventana", f"{n_pendientes:,}",
+                        f"< {MAX_DIAS_SIN_ASIGNAR} días desde creación"),
+               unsafe_allow_html=True)
+na_c4.markdown(kpi_card("Días promedio", f"{prom_dias_no_asig:.1f}",
+                        "sin asignar"), unsafe_allow_html=True)
+
+if n_no_asig > 0:
+    show_no = [
+        ("dealname",        "Nombre"),
+        ("createdate",      "Fecha creación"),
+        ("dias_desde_creacion", "Días esperando"),
+        ("preofertaflag1",  "Envíos hechos"),
+        ("dealstage",       "Etapa"),
+        ("interaccion",     "Interacción"),
+        ("phone",           "Teléfono"),
+        ("hs_object_id",    "deal_id"),
+        ("deal_uuid",       "deal_uuid"),
+    ]
+    present_no = [(s, l) for s, l in show_no if s in df_no_asig.columns]
+    df_no_display = df_no_asig[[s for s, _ in present_no]].rename(columns=dict(present_no))
+    if "Días esperando" in df_no_display.columns:
+        df_no_display["Días esperando"] = df_no_display["Días esperando"].astype(float).round(1)
+    st.dataframe(df_no_display, hide_index=True, use_container_width=True)
+else:
+    st.success("Ningún deal seller pendiente de asignación en el rango.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tracking Supabase · envíos, interacciones, asignaciones automáticas
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Tracking Supabase · envíos, interacciones y asignaciones</h2>", unsafe_allow_html=True)
+st.caption(
+    "Tablas pobladas en tiempo real por la landing (`whatsapp_sends`, "
+    "`deal_interactions`, `deal_assignments`). Sirven como log inmutable y "
+    "para responder ‘después de cuál envío fue que interactuó el cliente’."
+)
+
+# Restringimos las tablas Supabase a los deal_id que pertenecen al tratamiento
+# del rango (df_t en HubSpot). Esto evita contaminar con pruebas o con leads
+# fuera del experimento.
+deal_ids_t = set(df_t["hs_object_id"].astype(str)) if "hs_object_id" in df_t.columns else set()
+df_sends_t = sb_src.filter_deals(df_sends, deal_ids_t) if not df_sends.empty else df_sends
+df_inter_t = sb_src.filter_deals(df_interactions, deal_ids_t) if not df_interactions.empty else df_interactions
+df_asig_t = sb_src.filter_deals(df_assignments, deal_ids_t) if not df_assignments.empty else df_assignments
+
+sb1, sb2, sb3, sb4 = st.columns(4)
+sb1.markdown(kpi_card(
+    "Envíos WA registrados",
+    f"{len(df_sends_t):,}",
+    "supabase.whatsapp_sends",
+), unsafe_allow_html=True)
+sb2.markdown(kpi_card(
+    "Interacciones del cliente",
+    f"{len(df_inter_t):,}",
+    "supabase.deal_interactions",
+), unsafe_allow_html=True)
+sb3.markdown(kpi_card(
+    "Asignaciones automáticas",
+    f"{len(df_asig_t):,}",
+    "supabase.deal_assignments",
+), unsafe_allow_html=True)
+ultimo_envio = (
+    df_sends_t["sent_at"].max().strftime("%Y-%m-%d %H:%M")
+    if not df_sends_t.empty else "—"
+)
+sb4.markdown(kpi_card("Último envío WA", ultimo_envio, "max(sent_at)"),
+             unsafe_allow_html=True)
+
+
+# Distribución: en qué envío interactuó cada cliente (1..4)
+def _send_number_dist(df: pd.DataFrame, title: str, color: str):
+    if df.empty or "send_number" not in df.columns:
+        st.caption(f"{title}: sin datos en el rango.")
+        return
+    s = pd.to_numeric(df["send_number"], errors="coerce").fillna(0).astype(int).clip(0, MAX_ENVIOS)
+    counts = s.value_counts().reindex(range(1, MAX_ENVIOS + 1), fill_value=0)
+    labels = [f"Después del envío {i}" for i in range(1, MAX_ENVIOS + 1)]
+    vals = [int(counts.get(i, 0)) for i in range(1, MAX_ENVIOS + 1)]
+    fig = go.Figure(go.Bar(
+        x=vals, y=labels, orientation="h",
+        marker_color=color,
+        text=[f"{v:,}" for v in vals], textposition="outside",
+        textfont=dict(size=10, color=DEEP),
+    ))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=10),
+        height=240, margin=dict(l=10, r=60, t=44, b=10),
+        xaxis=dict(title="Clientes", gridcolor="#ede8f5", tickformat=",d"),
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+dist_c1, dist_c2 = st.columns(2)
+with dist_c1:
+    # Filtrar interacciones positivas (oferta + preguntas, sin error)
+    if not df_inter_t.empty and "property" in df_inter_t.columns:
+        df_inter_pos = df_inter_t[df_inter_t["property"].isin(
+            ["quiero_recibir_oferta_formal", "tengo_preguntas"]
+        )]
+    else:
+        df_inter_pos = df_inter_t
+    _send_number_dist(
+        df_inter_pos,
+        "¿En qué envío clickeó? (oferta + preguntas)",
+        PRIMARY,
+    )
+
+with dist_c2:
+    _send_number_dist(
+        df_asig_t.rename(columns={"send_number_at_assignment": "send_number"})
+        if not df_asig_t.empty else df_asig_t,
+        "¿En qué envío se asignó al MM?",
+        ACCENT,
+    )
+
+
+# Desglose de razones de asignación (interaction_* vs day4_*)
+if not df_asig_t.empty and "reason" in df_asig_t.columns:
+    reason_counts = df_asig_t["reason"].fillna("desconocido").value_counts()
+    reason_df = reason_counts.reset_index()
+    reason_df.columns = ["reason", "N"]
+    fig_reason = go.Figure(go.Pie(
+        labels=reason_df["reason"], values=reason_df["N"],
+        hole=0.45, marker_colors=[GREEN_DARK, PRIMARY, MED, LIGHT, ACCENT, GREY],
+        textinfo="label+percent+value", textfont_size=11,
+    ))
+    fig_reason.update_layout(
+        paper_bgcolor=WHITE, showlegend=False,
+        title=dict(text="Razón de la asignación automática",
+                   font=dict(size=13, color=DEEP)),
+        height=320, margin=dict(l=5, r=5, t=44, b=5),
+    )
+    st.plotly_chart(fig_reason, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Desglose · tabla detallada
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(f"<h2>Desglose ({len(df_t_f):,})</h2>", unsafe_allow_html=True)
@@ -749,6 +1025,7 @@ show_cols = [
     ("prioridad_gestion_market_maker", "Categoría"),
     ("asignacion_label",               "Asignación"),
     ("interaccion",                    "Interacción"),
+    ("preofertaflag1",                 "Envíos WA"),
     ("abrió_link",                     "Abrió link"),
     ("n_aperturas",                    "# aperturas"),
     ("quiero_recibir_oferta_formal",   "# Quiero oferta"),
