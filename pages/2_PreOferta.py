@@ -156,6 +156,17 @@ def load_funnel_mex(nids: tuple[int, ...], date_from: str, date_to: str) -> pd.D
     return bq_src.fetch_funnel_mex(list(nids), date_from=date_from, date_to=date_to)
 
 
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · A/B funnel MX…", persist="disk")
+def load_ab_funnel_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
+    """Funnel A/B armado en BQ: cada (nid, grupo) con sus etapas."""
+    return bq_src.fetch_ab_funnel_mex(since_iso, until_iso)
+
+
+@st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel mensual MX…", persist="disk")
+def load_funnel_monthly_mex(months_back: int = 12) -> pd.DataFrame:
+    return bq_src.fetch_funnel_monthly_mex(months_back)
+
+
 @st.cache_data(ttl=SHORT, show_spinner=False)
 def enrich_deals_df(
     df: pd.DataFrame,
@@ -515,65 +526,54 @@ st.plotly_chart(fig_funnel, use_container_width=True)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Comparativa A/B · Control vs Tratamiento</h2>", unsafe_allow_html=True)
 
-# Construir el conjunto de nids del control SIN filtrar por categoría: queremos
-# el funnel completo de Habi (excluyendo el tratamiento). El user lo pidió así
-# en lugar del filtrado a 'prioridad_gestion_market_maker == B' que sesgaba el
-# control a apenas un puñado de leads.
-df_c_full = pd.DataFrame()
-if not df_c.empty:
-    df_c_full = df_c.copy()
-    uuids_c = tuple(sorted(df_c_full["deal_uuid"].dropna().astype(str).str.lower().unique().tolist()))
-    if uuids_c:
-        try:
-            df_nid_c = load_nid_mapping(uuids_c)
-            df_c_full["deal_uuid_lc"] = df_c_full["deal_uuid"].astype(str).str.lower()
-            df_nid_c["deal_uuid_lc"] = df_nid_c["deal_uuid"].astype(str).str.lower()
-            df_c_full = df_c_full.merge(df_nid_c[["deal_uuid_lc", "nid"]], on="deal_uuid_lc", how="left", suffixes=("_hs", ""))
-        except Exception:
-            df_c_full["nid"] = None
-
-nids_c = set(df_c_full["nid"].dropna().astype(int).tolist()) if "nid" in df_c_full.columns else set()
-
+# Cargamos el funnel A/B directamente desde BQ (mucho más rápido y preciso
+# que paginar 9000+ deals desde HubSpot). El control queda definido como
+# "todo MX no-seller" y el tratamiento como contacto_digital='seller'.
 try:
-    df_funnel_c = load_funnel_mex(tuple(nids_c), since_iso, until_iso) if nids_c else pd.DataFrame()
-except Exception:
-    df_funnel_c = pd.DataFrame()
+    df_ab = load_ab_funnel_mex(since_iso, until_iso)
+except Exception as exc:
+    df_ab = pd.DataFrame()
+    st.warning(f"BQ A/B funnel: {type(exc).__name__}: {exc}")
 
 
-def _count_stage_in(df_fun: pd.DataFrame, stage: str, nids: set) -> int:
-    if df_fun.empty:
-        return 0
-    sub = df_fun[df_fun["valor"] == stage]
-    if not nids:
-        return int(sub["nid"].nunique())
-    return int(sub[sub["nid"].isin(nids)]["nid"].nunique())
-
-
-# Etapas comparables (mismas para ambos)
-COMPARE_STAGES = [
-    ("Lead llega",        "_universe"),
-    ("Asignación",        "Primer asignacion"),
-    ("Cita Agendada",     "Cita Agendada (hubspot)"),
-    ("Visita Efectuada",  "Visita Efectuada (hubspot)"),
-    ("Pre-comité",        "Pre-comite validado"),
-    ("Aprobado",          "Aprobado General"),
-    ("Oferta",            "Pendiente respuesta oferta"),
-    ("Cierre",            "Cierre - Comprado"),
+# Etapas comparables. Las stages se alinean con la query oficial de Habi
+# (`bi_mx.seguimiento_funnel_mex`). Cuando la columna `stage` es una lista,
+# contamos la unión (caso Cierre que suma Comprado + OCD).
+COMPARE_STAGES: list[tuple[str, list[str] | str]] = [
+    ("Lead llega",       "_universe"),
+    ("Asignación",       ["Primer asignacion"]),
+    ("Cita Agendada",    ["Cita Agendada (hubspot)", "Cita Agendada"]),
+    ("Visita Efectuada", ["Visita Efectuada (hubspot)", "Visita Efectuada"]),
+    ("Pre-comité",       ["Pre-comite validado"]),
+    ("Aprobado",         ["Aprobado General"]),
+    ("Oferta",           ["Pendiente respuesta oferta"]),
+    ("Cierre",           ["Cierre - Comprado", "Cierre  OCD"]),
 ]
 
 
-def _build_funnel_counts(df_fun: pd.DataFrame, nids: set, universe: int) -> list[int]:
-    counts = []
-    for label, stage in COMPARE_STAGES:
-        if stage == "_universe":
+def _count_stages_for_group(df_ab: pd.DataFrame, grupo: str, stages: list[str]) -> int:
+    if df_ab.empty:
+        return 0
+    sub = df_ab[(df_ab["grupo"] == grupo) & (df_ab["valor"].isin(stages))]
+    return int(sub["nid"].nunique())
+
+
+def _build_funnel_counts(df_ab: pd.DataFrame, grupo: str) -> list[int]:
+    # Universo = total de nids distintos del grupo (con o sin etapas en funnel)
+    universe = int(df_ab[df_ab["grupo"] == grupo]["nid"].nunique()) if not df_ab.empty else 0
+    counts: list[int] = []
+    for _label, stages in COMPARE_STAGES:
+        if stages == "_universe":
             counts.append(universe)
+        elif isinstance(stages, list):
+            counts.append(_count_stages_for_group(df_ab, grupo, stages))
         else:
-            counts.append(_count_stage_in(df_fun, stage, nids))
+            counts.append(_count_stages_for_group(df_ab, grupo, [stages]))
     return counts
 
 
-vals_t = _build_funnel_counts(df_funnel, nids_f, n_universo)
-vals_c = _build_funnel_counts(df_funnel_c, nids_c, len(df_c_full))
+vals_c = _build_funnel_counts(df_ab, "A")
+vals_t = _build_funnel_counts(df_ab, "B")
 
 col_c, col_t = st.columns(2)
 labels = [s[0] for s in COMPARE_STAGES]
@@ -659,6 +659,67 @@ st.markdown(
     f"</div>",
     unsafe_allow_html=True,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Funnel mensual MX · contexto histórico (últimos 12 meses)
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Funnel mensual MX · contexto histórico</h2>", unsafe_allow_html=True)
+
+try:
+    df_monthly = load_funnel_monthly_mex(12)
+except Exception as exc:
+    df_monthly = pd.DataFrame()
+    st.warning(f"BQ funnel mensual: {type(exc).__name__}: {exc}")
+
+if not df_monthly.empty:
+    # Stages a graficar (orden lógico del funnel)
+    MONTHLY_STAGES = [
+        ("Cita Agendada (hubspot)",        "#ff6b6b"),
+        ("Cita Agendada",                  PRIMARY),
+        ("Visita Efectuada (hubspot)",     "#ff8c5a"),
+        ("Visita Efectuada",               "#4fb0c6"),
+        ("Pre-comite validado",            GREEN_LIGHT),
+        ("Aprobado General",               "#7f7f7f"),
+        ("Pendiente respuesta oferta",     GREEN_DARK),
+        ("Acepto Oferta - Pendiente firma", "#444"),
+        ("Cierre - Comprado",              "#e63946"),
+        ("Cierre  OCD",                    DEEP),
+    ]
+    df_monthly["mes_str"] = pd.to_datetime(df_monthly["mes"]).dt.strftime("%b %Y").str.lower()
+    meses_ordenados = (
+        df_monthly[["mes", "mes_str"]]
+        .drop_duplicates()
+        .sort_values("mes")["mes_str"].tolist()
+    )
+
+    fig_monthly = go.Figure()
+    for stage, color in MONTHLY_STAGES:
+        sub = df_monthly[df_monthly["valor"] == stage].copy()
+        if sub.empty:
+            continue
+        sub = sub.set_index("mes_str").reindex(meses_ordenados).reset_index()
+        sub["leads"] = sub["leads"].fillna(0).astype(int)
+        fig_monthly.add_trace(go.Bar(
+            x=sub["mes_str"], y=sub["leads"],
+            name=stage,
+            marker_color=color,
+            hovertemplate=f"<b>{stage}</b><br>%{{x}}<br>%{{y:,}} leads<extra></extra>",
+        ))
+    fig_monthly.update_layout(
+        barmode="group",
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=10),
+        height=420,
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+        xaxis=dict(title="Mes", gridcolor="#ede8f5", categoryorder="array",
+                   categoryarray=meses_ordenados),
+        yaxis=dict(title="Leads únicos", gridcolor="#ede8f5", tickformat=",d"),
+    )
+    st.plotly_chart(fig_monthly, use_container_width=True)
+else:
+    st.info("Sin datos del funnel mensual MX.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

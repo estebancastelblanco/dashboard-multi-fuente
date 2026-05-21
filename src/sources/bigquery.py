@@ -101,6 +101,96 @@ def fetch_funnel_mex(
     return _client().query(sql).to_dataframe()
 
 
+def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.DataFrame:
+    """Funnel A/B del experimento Pre-Oferta MX, calculado en BQ.
+
+    Devuelve un row por (nid, grupo, valor) donde:
+      - grupo = 'B' si el deal HubSpot tiene contacto_digital='seller'
+                (tratamiento del experimento)
+      - grupo = 'A' en cualquier otro caso (control = funnel completo de
+                Habi MX sin el tratamiento)
+
+    La ventaja vs construir esto desde la API de HubSpot es velocidad y
+    completitud: no depende de paginar 9000+ deals.
+    """
+    until_clause = ""
+    if until_iso:
+        until_clause = f"AND DATE(fecha) <= '{until_iso}'"
+    sql = f"""
+    WITH tratamiento_nids AS (
+      SELECT DISTINCT CAST(nid AS INT64) AS nid
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE LOWER(contacto_digital) = 'seller'
+        AND DATE(createdate) >= '{since_iso}'
+        AND nid IS NOT NULL
+    ),
+    funnel AS (
+      SELECT
+        nid,
+        valor,
+        MIN(fecha) AS fecha
+      FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
+      WHERE DATE(fecha) >= '{since_iso}'
+        {until_clause}
+      GROUP BY nid, valor
+    ),
+    universos AS (
+      -- Universo control = deals MX no-seller creados en la ventana
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        'A' AS grupo
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE LOWER(country) IN ('méxico', 'mexico')
+        AND (LOWER(contacto_digital) != 'seller' OR contacto_digital IS NULL)
+        AND DATE(createdate) >= '{since_iso}'
+        AND nid IS NOT NULL
+      UNION ALL
+      -- Universo tratamiento = deals seller (=> contacto_digital='seller')
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        'B' AS grupo
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE LOWER(contacto_digital) = 'seller'
+        AND DATE(createdate) >= '{since_iso}'
+        AND nid IS NOT NULL
+    )
+    SELECT
+      u.nid,
+      u.grupo,
+      f.valor,
+      f.fecha
+    FROM universos u
+    LEFT JOIN funnel f USING(nid)
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty and "fecha" in df.columns:
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    return df
+
+
+def fetch_funnel_monthly_mex(months_back: int = 12) -> pd.DataFrame:
+    """Funnel MX completo agregado por mes — vista histórica del producto.
+
+    Devuelve `mes, valor, leads` para los últimos N meses, sirve para mostrar
+    cómo se ha comportado el funnel a lo largo del tiempo (no solo durante
+    la ventana del experimento).
+    """
+    sql = f"""
+    SELECT
+      DATE_TRUNC(DATE(fecha), MONTH) AS mes,
+      valor,
+      COUNT(DISTINCT nid) AS leads
+    FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
+    WHERE DATE(fecha) >= DATE_SUB(CURRENT_DATE(), INTERVAL {int(months_back)} MONTH)
+    GROUP BY mes, valor
+    ORDER BY mes, leads DESC
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty and "mes" in df.columns:
+        df["mes"] = pd.to_datetime(df["mes"], errors="coerce")
+    return df
+
+
 def fetch_top_inmuebles(limit: int = 10) -> pd.DataFrame:
     dataset_project = os.environ.get("BQ_DATASET_PROJECT", "papyrus-data-mx")
     dataset = os.environ.get("BQ_DATASET", "habi_wh_hesh")
