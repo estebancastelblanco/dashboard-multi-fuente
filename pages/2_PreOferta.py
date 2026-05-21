@@ -696,20 +696,43 @@ with col_ab:
     if total > 0:
         share_t = n_t_total / total * 100
         share_c = n_c_total / total * 100
-        fig_ab = go.Figure(go.Pie(
-            labels=["Tratamiento (Seller)", "Control (no-Seller)"],
-            values=[n_t_total, n_c_total],
-            hole=0.42,
-            marker_colors=[GREEN_DARK, PRIMARY],
-            textinfo="label+percent+value", textfont_size=11,
+        # Bar chart horizontal apilado: mucho mas legible que un pie cuando
+        # las proporciones son extremas (95/5).
+        fig_ab = go.Figure()
+        fig_ab.add_trace(go.Bar(
+            x=[n_c_total], y=["Split"], orientation="h",
+            marker_color=PRIMARY,
+            text=[f"Control · {n_c_total:,} ({share_c:.1f}%)"],
+            textposition="inside", textfont=dict(color="#fff", size=12),
+            name="Control (no-Seller)",
+            hovertemplate="Control: %{x:,} (%{customdata:.1f}%)<extra></extra>",
+            customdata=[share_c],
+        ))
+        fig_ab.add_trace(go.Bar(
+            x=[n_t_total], y=["Split"], orientation="h",
+            marker_color=GREEN_DARK,
+            text=[f"Tratamiento · {n_t_total:,} ({share_t:.1f}%)"],
+            textposition="inside", textfont=dict(color="#fff", size=12),
+            name="Tratamiento (Seller)",
+            hovertemplate="Tratamiento: %{x:,} (%{customdata:.1f}%)<extra></extra>",
+            customdata=[share_t],
         ))
         target_line = f"Target 95/5 · actual {share_c:.1f}/{share_t:.1f}"
         fig_ab.update_layout(
-            paper_bgcolor=WHITE, showlegend=False,
-            title=dict(text=f"Split A/B · {target_line}", font=dict(size=13, color=DEEP)),
-            height=320, margin=dict(l=5, r=5, t=44, b=5),
+            barmode="stack",
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            showlegend=False,
+            title=dict(text=f"Split A/B · {target_line}",
+                       font=dict(size=13, color=DEEP, family="Inter")),
+            height=180, margin=dict(l=5, r=5, t=44, b=10),
+            xaxis=dict(visible=False, showgrid=False),
+            yaxis=dict(visible=False),
         )
         st.plotly_chart(fig_ab, use_container_width=True)
+        st.caption(
+            f"Universo total {total:,} leads MX en {since_iso} → {until_iso}. "
+            f"Tratamiento (seller) {share_t:.2f}% vs Control (no-seller) {share_c:.2f}%."
+        )
 
 with col_cat:
     if "prioridad_gestion_market_maker" in df_t_f.columns:
@@ -814,16 +837,42 @@ with st.expander("Cómo se calculan estos umbrales"):
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Evolución de los 4 envíos · plantilla WhatsApp</h2>", unsafe_allow_html=True)
 st.caption(
-    "Cuántos leads están esperando o ya recibieron cada uno de los 4 envíos. "
-    "La flag `preofertaflag1` en HubSpot se incrementa después de cada envío "
-    "(workflow Infobip → /api/whatsapp/sent). 0 = aún sin enviar el primero."
+    "Cómo van progresando los leads a través de los 4 envíos secuenciales. "
+    "La barra **Acumulado** responde a “¿cuántos recibieron al menos N envíos?” "
+    "y la **Actual** a “¿cuántos están exactamente en ese paso ahora mismo?”"
 )
 
 flag_series = (
     df_t_f["preofertaflag1"].fillna(0).astype(int).clip(lower=0, upper=MAX_ENVIOS)
 )
 flag_counts = flag_series.value_counts().reindex(range(0, MAX_ENVIOS + 1), fill_value=0)
+total_uni = max(1, len(df_t_f))
 
+# KPIs compactos: cuantos recibieron AL MENOS N envios
+def _at_least(n: int) -> int:
+    return int(sum(flag_counts.get(i, 0) for i in range(n, MAX_ENVIOS + 1)))
+
+received_at_least = {n: _at_least(n) for n in range(0, MAX_ENVIOS + 1)}
+
+# 5 KPI cards horizontales con conteo + % del universo
+kpi_cols = st.columns(MAX_ENVIOS + 1)
+KPI_LABELS = {
+    0: ("Universo",        "leads en tratamiento"),
+    1: ("≥ 1 envío",       "han recibido al menos el primero"),
+    2: ("≥ 2 envíos",      "siguen vivos al envío 2"),
+    3: ("≥ 3 envíos",      "siguen vivos al envío 3"),
+    4: ("≥ 4 envíos",      "completaron la secuencia"),
+}
+for i, col in enumerate(kpi_cols):
+    val = received_at_least[i]
+    pct = val / total_uni * 100
+    label, sub = KPI_LABELS[i]
+    col.markdown(
+        kpi_card(label, f"{val:,}", f"{pct:.1f}% · {sub}"),
+        unsafe_allow_html=True,
+    )
+
+# Doble bar chart horizontal: Actual (en este paso ahora) + Acumulado (≥N)
 LABELS_FLAG = {
     0: "Sin enviar",
     1: "Recibió 1 · esperando 2",
@@ -831,33 +880,49 @@ LABELS_FLAG = {
     3: "Recibió 3 · esperando 4",
     4: "Recibió los 4",
 }
+labels_full = [LABELS_FLAG[i] for i in range(0, MAX_ENVIOS + 1)]
+vals_now = [int(flag_counts.get(i, 0)) for i in range(0, MAX_ENVIOS + 1)]
+vals_acum = [received_at_least[i] for i in range(0, MAX_ENVIOS + 1)]
 
-env_cols = st.columns(MAX_ENVIOS + 1)
-for i, col in enumerate(env_cols):
-    col.markdown(
-        kpi_card(LABELS_FLAG[i], f"{int(flag_counts.get(i, 0)):,}",
-                 "preofertaflag1 = " + str(i)),
-        unsafe_allow_html=True,
-    )
-
-# Bar chart horizontal con gradiente
-flag_labels = [LABELS_FLAG[i] for i in range(0, MAX_ENVIOS + 1)]
-flag_vals = [int(flag_counts.get(i, 0)) for i in range(0, MAX_ENVIOS + 1)]
-flag_colors = [LIGHT, PALE, MED, PRIMARY, DEEP]
-fig_envios = go.Figure(go.Bar(
-    x=flag_vals, y=flag_labels, orientation="h",
-    marker_color=flag_colors,
-    text=[f"{v:,}" for v in flag_vals], textposition="outside",
-    textfont=dict(size=11, color=DEEP),
+fig_envios = go.Figure()
+fig_envios.add_trace(go.Bar(
+    x=vals_acum, y=labels_full, orientation="h",
+    marker_color=PALE,
+    text=[f"{v:,}  ({v/total_uni*100:.0f}%)" for v in vals_acum],
+    textposition="outside", textfont=dict(size=10, color=MED),
+    name="Acumulado (≥ N)",
+    hovertemplate="Acumulado %{y}: %{x:,}<extra></extra>",
+))
+fig_envios.add_trace(go.Bar(
+    x=vals_now, y=labels_full, orientation="h",
+    marker_color=PRIMARY,
+    text=[f"{v:,}" for v in vals_now],
+    textposition="inside", textfont=dict(size=10, color="#fff"),
+    name="Actualmente en este paso",
+    hovertemplate="Hoy en %{y}: %{x:,}<extra></extra>",
 ))
 fig_envios.update_layout(
+    barmode="overlay",
     paper_bgcolor=WHITE, plot_bgcolor=WHITE,
     font=dict(family="Inter, sans-serif", color=DEEP, size=11),
-    height=260, margin=dict(l=10, r=80, t=10, b=10),
+    height=300, margin=dict(l=10, r=100, t=10, b=10),
     xaxis=dict(title="Leads", gridcolor="#ede8f5", tickformat=",d"),
     yaxis=dict(autorange="reversed"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
 )
 st.plotly_chart(fig_envios, use_container_width=True)
+
+# Insights: tasa de progresion entre pasos
+prog_cols = st.columns(MAX_ENVIOS)
+for n in range(1, MAX_ENVIOS + 1):
+    prev = received_at_least[n - 1] if n > 1 else total_uni
+    curr = received_at_least[n]
+    pct = (curr / prev * 100) if prev > 0 else 0.0
+    prog_cols[n - 1].markdown(kpi_card(
+        f"Progresión {n - 1 if n > 1 else 'Universo'} → {n}",
+        f"{pct:.0f}%",
+        f"{curr:,} de {prev:,} avanzaron",
+    ), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -999,6 +1064,144 @@ with board_col:
                     st.markdown(cards_html, unsafe_allow_html=True)
                     if n_col > 40:
                         st.caption(f"+{n_col - 40} más…")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Asignados · funnel del Market Maker (pipeline destino)
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<h2>Asignados · funnel del Market Maker</h2>", unsafe_allow_html=True)
+st.caption(
+    f"Deals que ya fueron movidos al pipeline destino "
+    f"`{PIPELINE_DESTINO}` (Sellers - Market Maker MX). "
+    "Permite ver cómo van avanzando los leads asignados etapa por etapa."
+)
+
+# Stages principales del pipeline destino (orden lógico del funnel comercial)
+# Codigos verificados con GET /pipelines/deals/731899270.
+ASIGNADOS_STAGES: list[tuple[str, str]] = [
+    ("1066429804", "Asignado"),
+    ("1068448315", "1er intento de contacto"),
+    ("1066429805", "Perfilado"),
+    ("1066429808", "Agendado"),
+    ("1066429809", "Visitado"),
+    ("1066441576", "Enviado a comité"),
+    ("1066441579", "Aprobados"),
+    ("1066441580", "Ofertados"),
+    ("1066441581", "Ofertas aceptadas"),
+    ("1066441593", "Firmado"),
+]
+# Side-states que sacan al lead del flujo principal (no son etapas avanzadas).
+LEAK_STAGES: list[tuple[str, str]] = [
+    ("1066429806", "Visita cancelada"),
+    ("1089120851", "Regestión"),
+    ("1066441594", "Perdido"),
+]
+
+df_asignados = df_t[df_t["pipeline"].astype(str) == PIPELINE_DESTINO].copy()
+n_asignados = len(df_asignados)
+
+# Distribución actual por stage (todos los stages del pipeline destino)
+stage_counts_raw = df_asignados["dealstage"].astype(str).value_counts() if n_asignados else pd.Series(dtype=int)
+
+funnel_vals = [int(stage_counts_raw.get(code, 0)) for code, _ in ASIGNADOS_STAGES]
+funnel_labels = [label for _, label in ASIGNADOS_STAGES]
+leak_vals = [int(stage_counts_raw.get(code, 0)) for code, _ in LEAK_STAGES]
+
+# Calcular cuántos están "más adelante o igual a este stage" = funnel acumulado
+funnel_acum = []
+acumulado = 0
+for i in reversed(range(len(funnel_vals))):
+    acumulado += funnel_vals[i]
+    funnel_acum.append(acumulado)
+funnel_acum = list(reversed(funnel_acum))
+
+# Stages "fuera de ASIGNADOS_STAGES y fuera de LEAK_STAGES" (avanzados o intermedios no listados)
+known_codes = {c for c, _ in ASIGNADOS_STAGES} | {c for c, _ in LEAK_STAGES}
+otros = int(stage_counts_raw[~stage_counts_raw.index.isin(known_codes)].sum())
+
+avanzaron = sum(funnel_vals[1:]) + otros  # cualquiera mas alla de Asignado
+cvr_avance = (avanzaron / n_asignados * 100) if n_asignados else 0.0
+
+# KPIs
+ka1, ka2, ka3, ka4 = st.columns(4)
+ka1.markdown(kpi_card("Total asignados", f"{n_asignados:,}",
+                      "pipeline destino · Market Maker MX"),
+             unsafe_allow_html=True)
+ka2.markdown(kpi_card("Avanzaron post-asignación", f"{avanzaron:,}",
+                      f"{cvr_avance:.1f}% · más allá de 'Asignado'"),
+             unsafe_allow_html=True)
+ka3.markdown(kpi_card("En 'Asignado'", f"{funnel_vals[0]:,}",
+                      "stage inicial · esperando primer contacto"),
+             unsafe_allow_html=True)
+ka4.markdown(kpi_card("Side / Perdidos", f"{sum(leak_vals):,}",
+                      "cancelada, regestion o perdido"),
+             unsafe_allow_html=True)
+
+# Funnel horizontal con barras: ACUMULADO (≥ stage) + ACTUAL (en stage exacto)
+if n_asignados > 0:
+    fig_fa = go.Figure()
+    fig_fa.add_trace(go.Bar(
+        x=funnel_acum, y=funnel_labels, orientation="h",
+        marker_color=PALE,
+        text=[f"{v:,}" + (f"  ({v/funnel_acum[0]*100:.0f}%)" if funnel_acum[0] > 0 and i > 0 else "")
+              for i, v in enumerate(funnel_acum)],
+        textposition="outside", textfont=dict(size=10, color=MED),
+        name="Acumulado (≥ este stage)",
+        hovertemplate="%{y} acumulado: %{x:,}<extra></extra>",
+    ))
+    fig_fa.add_trace(go.Bar(
+        x=funnel_vals, y=funnel_labels, orientation="h",
+        marker_color=GREEN_DARK,
+        text=[f"{v:,}" for v in funnel_vals],
+        textposition="inside", textfont=dict(size=10, color="#fff"),
+        name="Actualmente en este stage",
+        hovertemplate="%{y} ahora: %{x:,}<extra></extra>",
+    ))
+    fig_fa.update_layout(
+        barmode="overlay",
+        paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+        font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+        height=420, margin=dict(l=10, r=120, t=40, b=10),
+        xaxis=dict(title="Deals", gridcolor="#ede8f5", tickformat=",d"),
+        yaxis=dict(autorange="reversed"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+    )
+    st.plotly_chart(fig_fa, use_container_width=True)
+
+    # Lista detallada de asignados con dias en stage actual
+    df_asignados_show = df_asignados.copy()
+    # Dias desde la asignacion (usamos hs_lastmodifieddate como proxy de cambio de stage,
+    # idealmente vendria de un histo de cambios pero no lo tenemos aqui)
+    df_asignados_show["dias_en_pipeline"] = df_asignados_show["dias_desde_creacion"].astype(float)
+    # Decodear stage label
+    df_asignados_show["stage_label"] = df_asignados_show["dealstage"].astype(str).map(
+        dict(ASIGNADOS_STAGES + LEAK_STAGES)
+    ).fillna("Otro stage")
+    df_asignados_show = df_asignados_show.sort_values("dias_en_pipeline", ascending=False)
+
+    show_a = [
+        ("dealname",          "Nombre"),
+        ("stage_label",       "Stage actual"),
+        ("dias_en_pipeline",  "Días en pipeline"),
+        ("preofertaflag1",    "Envíos WA"),
+        ("interaccion",       "Interacción"),
+        ("owner_label",       "Comercial"),
+        ("phone",             "Teléfono"),
+        ("hs_object_id",      "deal_id"),
+        ("deal_uuid",         "deal_uuid"),
+    ]
+    present_a = [(s, l) for s, l in show_a if s in df_asignados_show.columns]
+    df_a_display = df_asignados_show[[s for s, _ in present_a]].rename(columns=dict(present_a))
+    if "Días en pipeline" in df_a_display.columns:
+        df_a_display["Días en pipeline"] = df_a_display["Días en pipeline"].astype(float).round(1)
+    with st.expander(f"Ver listado completo de {n_asignados} asignados", expanded=False):
+        st.dataframe(df_a_display, hide_index=True, use_container_width=True)
+else:
+    st.info(
+        "Aún no hay deals asignados al Market Maker en el rango. "
+        "Cuando un cliente clickee 'Quiero oferta' / 'Tengo preguntas' o el cron del día 4 "
+        "actúe, aparecerán acá."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1153,7 +1356,7 @@ st.dataframe(df_display, hide_index=True, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Decisión · ÉXITO / INCONCLUSO / FRACASO
+# Decisión · ÉXITO / INCONCLUSO / FRACASO  (con predicción)
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Decisión · Marco post-experimento</h2>", unsafe_allow_html=True)
 
@@ -1183,53 +1386,157 @@ else:
         "Revisar mecanismos de transmisión, composición y entrega del mensaje."
     )
 
-card_colors = {
-    "ÉXITO":      (DEEP,  "Rollout"),
-    "INCONCLUSO": (MED,   "Revisar mecanismos"),
-    "FRACASO":    (LIGHT, "Revertir"),
-}
-hl_color, hl_sub = card_colors[decision]
+# Cards arriba: muestran el escenario actual resaltado en color, los otros 2 atenuados
+SCENARIO_DEFS = [
+    ("ÉXITO",      "Rollout",
+     "CVR asignado→cierre del tratamiento ≥ control · Margin variance neutro o positivo · Sin caída en cierres absolutos",
+     DEEP),
+    ("INCONCLUSO", "Revisar mecanismos",
+     "CVR ≈ control y margin variance ≈ control · Revisar entrega del mensaje, anclaje y composición de muestra",
+     PRIMARY),
+    ("FRACASO",    "Revertir",
+     "CVR < control, o margin variance significativamente negativo · Conservar evidencia para iterar copy y precio",
+     LIGHT),
+]
 
+cards_html = "<div style='display:flex;gap:14px;margin-bottom:14px'>"
+for name, sub, body, color in SCENARIO_DEFS:
+    active = (name == decision)
+    cards_html += (
+        f"<div style='flex:1;background:{color if active else PALE};"
+        f"color:{WHITE if active else DEEP};"
+        f"padding:18px 20px;border-radius:8px;"
+        f"border:{('3px solid ' + color) if active else '1px solid ' + PALE};"
+        f"opacity:{1.0 if active else 0.75}'>"
+        f"<div style='font-size:1.4rem;font-weight:700;letter-spacing:0.05em'>{name}</div>"
+        f"<div style='font-size:0.85rem;font-style:italic;opacity:0.9;margin:6px 0 10px 0'>{sub}</div>"
+        f"<div style='font-size:0.78rem;line-height:1.5'>{body}</div>"
+        f"</div>"
+    )
+cards_html += "</div>"
+st.markdown(cards_html, unsafe_allow_html=True)
+
+hl_color = next(c for n, _, _, c in SCENARIO_DEFS if n == decision)
 st.markdown(
-    f"""
-<div style="display:flex;gap:14px;margin-bottom:14px">
-  <div style="flex:1;background:{DEEP if decision=='ÉXITO' else PALE};color:{WHITE if decision=='ÉXITO' else DEEP};
-              padding:18px 20px;border-radius:8px;border:{('3px solid '+DEEP) if decision=='ÉXITO' else '1px solid '+PALE}">
-    <div style="font-size:1.4rem;font-weight:700;letter-spacing:0.05em">ÉXITO</div>
-    <div style="font-size:0.85rem;font-style:italic;opacity:0.9;margin:6px 0 10px 0">Rollout</div>
-    <ul style="font-size:0.78rem;padding-left:18px;margin:0;line-height:1.6">
-      <li>CVR asignado→cierre del tratamiento ≥ control</li>
-      <li>Margin variance neutro o positivo</li>
-      <li>Sin caída en cierres absolutos del segmento</li>
-    </ul>
-  </div>
-  <div style="flex:1;background:{PRIMARY if decision=='INCONCLUSO' else PALE};color:{WHITE if decision=='INCONCLUSO' else DEEP};
-              padding:18px 20px;border-radius:8px;border:{('3px solid '+PRIMARY) if decision=='INCONCLUSO' else '1px solid '+PALE}">
-    <div style="font-size:1.4rem;font-weight:700;letter-spacing:0.05em">INCONCLUSO</div>
-    <div style="font-size:0.85rem;font-style:italic;opacity:0.9;margin:6px 0 10px 0">Revisar mecanismos</div>
-    <ul style="font-size:0.78rem;padding-left:18px;margin:0;line-height:1.6">
-      <li>CVR ≈ control y margin variance ≈ control</li>
-      <li>Revisar entrega del mensaje, anclaje real en negociación y composición de muestra</li>
-    </ul>
-  </div>
-  <div style="flex:1;background:{LIGHT if decision=='FRACASO' else PALE};color:{WHITE if decision=='FRACASO' else DEEP};
-              padding:18px 20px;border-radius:8px;border:{('3px solid '+LIGHT) if decision=='FRACASO' else '1px solid '+PALE}">
-    <div style="font-size:1.4rem;font-weight:700;letter-spacing:0.05em">FRACASO</div>
-    <div style="font-size:0.85rem;font-style:italic;opacity:0.9;margin:6px 0 10px 0">Revertir</div>
-    <ul style="font-size:0.78rem;padding-left:18px;margin:0;line-height:1.6">
-      <li>CVR &lt; control, o margin variance significativamente negativo</li>
-      <li>Conservar evidencia para iterar copy y fórmula del precio</li>
-    </ul>
-  </div>
-</div>
-<div style="background:{hl_color};color:white;padding:14px 18px;border-radius:8px;margin-top:6px">
-  <div style="font-size:0.75rem;opacity:0.85;letter-spacing:0.08em;text-transform:uppercase">Lectura actual</div>
-  <div style="font-size:1.6rem;font-weight:700;margin:4px 0">{decision}</div>
-  <div style="font-size:0.85rem;opacity:0.95">{decision_reason}</div>
-</div>
-""",
+    f"<div style='background:{hl_color};color:white;padding:14px 18px;"
+    f"border-radius:8px;margin-bottom:18px'>"
+    f"<div style='font-size:0.75rem;opacity:0.85;letter-spacing:0.08em;"
+    f"text-transform:uppercase'>Lectura actual</div>"
+    f"<div style='font-size:1.6rem;font-weight:700;margin:4px 0'>{decision}</div>"
+    f"<div style='font-size:0.85rem;opacity:0.95'>{decision_reason}</div>"
+    f"</div>",
     unsafe_allow_html=True,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Predicción · cuándo se podría concluir
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown(
+    "<h3 style='margin-top:10px;color:" + DEEP + ";'>Predicción de cierre del experimento</h3>",
+    unsafe_allow_html=True,
+)
+
+# Heurística: con CVR ~1% necesitamos del orden de 25–30 cierres por rama para
+# detectar Δ ~0.5–1pp con poder razonable (alpha 5%, power 80%, two-sided).
+TARGET_CIERRES_TRAT = 25
+exp_start = pd.to_datetime(EXPERIMENT.start_date)
+today = pd.Timestamp(datetime.now().date())
+dias_corridos = max(1, (today - exp_start).days)
+
+# Ritmo actual = cierres acumulados / días corridos. Si aún no hay cierres,
+# asumimos un ritmo conservador en función del histórico de asignaciones.
+ritmo_cierres_dia_t = n_cierre_t / dias_corridos if n_cierre_t > 0 else 0.0
+faltantes_t = max(0, TARGET_CIERRES_TRAT - n_cierre_t)
+if ritmo_cierres_dia_t > 0:
+    dias_eta_t = faltantes_t / ritmo_cierres_dia_t
+    eta_date = today + pd.Timedelta(days=int(dias_eta_t))
+    eta_label = eta_date.strftime("%Y-%m-%d")
+    eta_sub = f"~{int(dias_eta_t)} días al ritmo actual de {ritmo_cierres_dia_t:.2f} cierres/día"
+else:
+    dias_eta_t = None
+    eta_label = "—"
+    eta_sub = "Aún sin cierres; ETA pendiente"
+
+# Construir serie de cierres acumulados proyectados.
+# Real: hoy mismo, una marca con el n_cierre_t y n_cierre_c.
+# Proyectada: linea recta hasta eta_date (target).
+fig_pred = go.Figure()
+
+# Punto actual real
+fig_pred.add_trace(go.Scatter(
+    x=[exp_start, today], y=[0, n_cierre_t],
+    mode="lines+markers", line=dict(color=GREEN_DARK, width=3),
+    marker=dict(size=8),
+    name=f"Tratamiento (real · {n_cierre_t})",
+    hovertemplate="%{x|%Y-%m-%d}: %{y} cierres<extra>Tratamiento</extra>",
+))
+fig_pred.add_trace(go.Scatter(
+    x=[exp_start, today], y=[0, n_cierre_c],
+    mode="lines+markers", line=dict(color=PRIMARY, width=3),
+    marker=dict(size=8),
+    name=f"Control (real · {n_cierre_c})",
+    hovertemplate="%{x|%Y-%m-%d}: %{y} cierres<extra>Control</extra>",
+))
+
+# Proyección lineal
+if ritmo_cierres_dia_t > 0 and dias_eta_t is not None:
+    proj_x = pd.date_range(today, today + pd.Timedelta(days=int(dias_eta_t)), periods=8)
+    proj_y = [n_cierre_t + ritmo_cierres_dia_t * (d - today).days for d in proj_x]
+    fig_pred.add_trace(go.Scatter(
+        x=proj_x, y=proj_y,
+        mode="lines", line=dict(color=GREEN_DARK, width=2, dash="dot"),
+        name="Proyección Tratamiento",
+        hovertemplate="%{x|%Y-%m-%d}: %{y:.1f} proyectados<extra>Proyección T</extra>",
+    ))
+
+# Línea umbral
+fig_pred.add_hline(
+    y=TARGET_CIERRES_TRAT,
+    line_dash="dash", line_color=MED,
+    annotation_text=f"Umbral significancia · {TARGET_CIERRES_TRAT} cierres T",
+    annotation_position="top right",
+    annotation_font=dict(color=MED, size=10),
+)
+
+fig_pred.update_layout(
+    paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+    font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+    height=340, margin=dict(l=10, r=10, t=10, b=10),
+    xaxis=dict(title="Fecha", gridcolor="#ede8f5"),
+    yaxis=dict(title="Cierres acumulados", gridcolor="#ede8f5",
+               rangemode="nonnegative"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+)
+st.plotly_chart(fig_pred, use_container_width=True)
+
+# KPIs de predicción
+p1, p2, p3, p4 = st.columns(4)
+p1.markdown(kpi_card("Días corridos", f"{dias_corridos:,}",
+                     f"desde {EXPERIMENT.start_date}"),
+            unsafe_allow_html=True)
+p2.markdown(kpi_card("Ritmo cierres T", f"{ritmo_cierres_dia_t:.2f}/día",
+                     f"{n_cierre_t} cierres / {dias_corridos} días"),
+            unsafe_allow_html=True)
+p3.markdown(kpi_card("Target cierres T", f"{TARGET_CIERRES_TRAT:,}",
+                     f"faltan {faltantes_t}"),
+            unsafe_allow_html=True)
+p4.markdown(kpi_card("ETA conclusión", eta_label, eta_sub),
+            unsafe_allow_html=True)
+
+with st.expander("Cómo se calcula la predicción"):
+    st.markdown(
+        f"""
+- **Ritmo cierres/día** = `cierres acumulados / días desde el lanzamiento ({EXPERIMENT.start_date})`.
+- **Target** = `{TARGET_CIERRES_TRAT}` cierres acumulados en el tratamiento. Heurística para
+  CVR base ~1% con alpha 5%, power 80%; se ajusta a medida que llegan datos.
+- **ETA** = `(target - cierres actuales) / ritmo cierres/día`. Asume ritmo constante; no
+  modela estacionalidad ni curva de aprendizaje.
+- **Cuándo ignorar la ETA**: si el ritmo es < 0.2 cierres/día durante las primeras 2 semanas,
+  el experimento probablemente no llegará a significancia y conviene rediseñar el copy o
+  aumentar el share del tratamiento.
+"""
+    )
 
 
 st.divider()
