@@ -168,20 +168,24 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
     return df
 
 
-def fetch_funnel_monthly_mex(months_back: int = 12) -> pd.DataFrame:
-    """Funnel MX completo agregado por mes — vista histórica del producto.
+def fetch_funnel_monthly_mex(
+    since_iso: str, until_iso: str | None = None,
+) -> pd.DataFrame:
+    """Funnel MX agregado por mes en el rango pedido.
 
-    Devuelve `mes, valor, leads` para los últimos N meses, sirve para mostrar
-    cómo se ha comportado el funnel a lo largo del tiempo (no solo durante
-    la ventana del experimento).
+    El rango lo controla el filtro de fechas del dashboard. Si el rango es
+    chico (~2 semanas) se ve un solo mes; si es amplio (~1 año) se ve la
+    evolución mensual completa.
     """
+    until_clause = f"AND DATE(fecha) <= '{until_iso}'" if until_iso else ""
     sql = f"""
     SELECT
       DATE_TRUNC(DATE(fecha), MONTH) AS mes,
       valor,
       COUNT(DISTINCT nid) AS leads
     FROM `sellers-main-prod.bi_mx.seguimiento_funnel_mex`
-    WHERE DATE(fecha) >= DATE_SUB(CURRENT_DATE(), INTERVAL {int(months_back)} MONTH)
+    WHERE DATE(fecha) >= '{since_iso}'
+      {until_clause}
     GROUP BY mes, valor
     ORDER BY mes, leads DESC
     """

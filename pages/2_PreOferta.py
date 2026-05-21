@@ -53,6 +53,23 @@ from src.styling import (
 st.set_page_config(page_title="Pre-Oferta", layout="wide")
 inject_base_css()
 
+# Spacing extra solo para esta página: más aire entre secciones, KPIs y gráficos.
+st.markdown("""
+<style>
+  /* Encabezados con más separación */
+  [data-testid="stMain"] h2 { margin-top: 44px !important; margin-bottom: 18px !important; }
+  [data-testid="stMain"] h3 { margin-top: 28px !important; margin-bottom: 14px !important; }
+  /* Cada bloque horizontal de KPIs/gráficos respira */
+  [data-testid="stMain"] [data-testid="stHorizontalBlock"] { margin-bottom: 14px; }
+  /* Gap entre cards horizontales */
+  [data-testid="stMain"] .kcard { margin-bottom: 6px; }
+  /* Margen alrededor de los plotly charts */
+  [data-testid="stMain"] [data-testid="stPlotlyChart"] { margin-top: 8px; margin-bottom: 8px; }
+  /* Caption descriptivo más pequeño */
+  [data-testid="stMain"] [data-testid="stCaptionContainer"] { margin-top: 4px; margin-bottom: 18px; }
+</style>
+""", unsafe_allow_html=True)
+
 EXPERIMENT = next(e for e in REGISTRY if e.slug == "preoferta-temprana")
 
 st.markdown(
@@ -163,8 +180,8 @@ def load_ab_funnel_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel mensual MX…", persist="disk")
-def load_funnel_monthly_mex(months_back: int = 12) -> pd.DataFrame:
-    return bq_src.fetch_funnel_monthly_mex(months_back)
+def load_funnel_monthly_mex(since_iso: str, until_iso: str) -> pd.DataFrame:
+    return bq_src.fetch_funnel_monthly_mex(since_iso, until_iso)
 
 
 @st.cache_data(ttl=SHORT, show_spinner=False)
@@ -493,8 +510,7 @@ f_sources = [s[2] for s in stages]
 palette = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE,
            GREEN_LIGHT, "#7eb37e", GREEN_DARK]
 f_text = [
-    f"{v:,}" + (f"  ({v/f_vals[i-1]*100:.0f}% vs anterior · {v/f_vals[0]*100:.1f}% del universo)"
-                if i > 0 and f_vals[i-1] > 0 and f_vals[0] > 0 else "")
+    f"{v:,}" + (f"  ·  {v/f_vals[i-1]*100:.0f}% CVR" if i > 0 and f_vals[i-1] > 0 else "")
     for i, v in enumerate(f_vals)
 ]
 nonzero = [v for v in f_vals if v > 0]
@@ -594,8 +610,7 @@ def _funnel_chart(values: list[int], title: str, palette: list[str]):
         else:
             prev = values[i - 1]
             pct_prev = (v / prev * 100) if prev > 0 else 0
-            pct_uni = v / universo * 100
-            text.append(f"{v:,}  ({pct_prev:.0f}% vs ant · {pct_uni:.1f}% univ)")
+            text.append(f"{v:,}  ·  {pct_prev:.0f}% CVR")
     nonzero = [v for v in values if v > 0]
     use_log = (max(values) if values else 0) > 50 and (min(nonzero) if nonzero else 0) > 0
     fig = go.Figure(go.Bar(
@@ -664,10 +679,10 @@ st.markdown(
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel mensual MX · contexto histórico (últimos 12 meses)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<h2>Funnel mensual MX · contexto histórico</h2>", unsafe_allow_html=True)
+st.markdown("<h2>Funnel mensual MX · rango del filtro</h2>", unsafe_allow_html=True)
 
 try:
-    df_monthly = load_funnel_monthly_mex(12)
+    df_monthly = load_funnel_monthly_mex(since_iso, until_iso)
 except Exception as exc:
     df_monthly = pd.DataFrame()
     st.warning(f"BQ funnel mensual: {type(exc).__name__}: {exc}")
