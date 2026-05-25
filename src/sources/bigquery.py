@@ -492,3 +492,178 @@ def fetch_oferta_formal_landing_events() -> pd.DataFrame:
         df["last_seen"] = pd.to_datetime(df["last_seen"], errors="coerce")
         df["uuid"] = df["uuid"].astype(str).str.lower()
     return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Oferta formal COL · dashboard (simplificado vs query maestra completa)
+# ─────────────────────────────────────────────────────────────────────────────
+OFERTA_FORMAL_COL_VARIANT_START = "2026-02-16"
+OFERTA_FORMAL_COL_DEALSTAGE_OFERTADO = "1172812204"
+OFERTA_FORMAL_COL_LANDING_HOST = "ofertas.habi.co"
+
+
+def fetch_oferta_formal_col_master() -> pd.DataFrame:
+    """Tabla maestra del experimento Oferta formal COL para el dashboard.
+
+    Versión simplificada de la query maestra COL: omite armado (im-main-prod),
+    subsidios y joins analíticos pesados. Conserva la lógica clave del
+    experimento:
+      - ofertas desde detalle_ofertas_col
+      - variante abc_test_landing_co solo si fecha_ofertado >= 2026-02-16
+      - cierres desde int_sellers_cierres_desistidos_co_dwh
+      - fecha_ofertado vía dealstage 1172812204 en hubspot.historical
+    """
+    variant_start = OFERTA_FORMAL_COL_VARIANT_START
+    dealstage_ofertado = OFERTA_FORMAL_COL_DEALSTAGE_OFERTADO
+    sql = f"""
+    WITH
+    base_ofertas AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        DATE(fecha_aprobado) AS fecha_aprobado,
+        DATE(fecha_cierre)   AS fecha_cierre,
+        estado_aprobado,
+        equipo_sellers
+      FROM `papyrus-data.habi_wh.detalle_ofertas_col`
+      WHERE fecha_aprobado IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY nid, DATE(fecha_aprobado) ORDER BY fecha_aprobado DESC
+      ) = 1
+    ),
+    base_hubspot AS (
+      SELECT
+        CAST(d.nid AS INT64) AS nid,
+        d.abc_test_landing_co,
+        d.ab_test_landing,
+        LOWER(d.deal_uuid) AS deal_uuid,
+        d.pipeline,
+        d.hubspot_owner_id,
+        TRIM(CONCAT(IFNULL(o.first_name, ''), ' ', IFNULL(o.last_name, ''))) AS owner_name,
+        SAFE_CAST(d.precio_comite AS FLOAT64) AS precio_comite,
+        SAFE_CAST(d.ask_price_despues__de_remodelacion AS FLOAT64) AS customer_price,
+        SAFE_CAST(d.precio_comite_final_final_final__el_unico____clonada_ AS FLOAT64) AS oferta_final_calculada
+      FROM `sellers-main-prod.hubspot.deals` d
+      LEFT JOIN `sellers-main-prod.hubspot.owners` o
+        ON LOWER(o.email) = LOWER(d.hubspot_owner_id)
+        OR CAST(o.id AS STRING) = CAST(d.hubspot_owner_id AS STRING)
+      WHERE d.country = 'Colombia'
+    ),
+    pasaron_ofertados AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(fecha) AS fecha_ofertado
+      FROM `sellers-main-prod.hubspot.historical`
+      WHERE propiedad = 'dealstage' AND valor = '{dealstage_ofertado}'
+      GROUP BY 1
+    ),
+    base_cierres_col AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(DATE(v_fecha_promesa)) AS v_fecha_promesa
+      FROM `papyrus-master.operations_sellers_co_dwh.int_sellers_cierres_desistidos_co_dwh`
+      WHERE v_fecha_promesa IS NOT NULL
+      GROUP BY 1
+    )
+    SELECT
+      o.nid,
+      CASE
+        WHEN DATE(po.fecha_ofertado) >= '{variant_start}' THEN hs.abc_test_landing_co
+        ELSE NULL
+      END AS abc_test_landing_co,
+      hs.ab_test_landing,
+      hs.deal_uuid,
+      hs.pipeline,
+      hs.hubspot_owner_id,
+      hs.owner_name,
+      o.equipo_sellers,
+      o.estado_aprobado,
+      o.fecha_aprobado,
+      DATE_TRUNC(o.fecha_aprobado, WEEK(MONDAY)) AS fecha_aprobado_semana,
+      o.fecha_cierre,
+      c.v_fecha_promesa,
+      IFNULL(o.fecha_cierre, c.v_fecha_promesa) AS fecha_cierre_efectiva,
+      DATE(po.fecha_ofertado) AS fecha_ofertado,
+      IF(po.nid IS NOT NULL, 'Ofertado', 'No ofertado') AS fue_ofertado,
+      CASE
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) IS NULL THEN NULL
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) > -0.16 THEN 'Baja diferencia (20%)'
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) >= -0.30 THEN 'Media diferencia (13%)'
+        WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) < -0.30 THEN 'Alta diferencia (5%)'
+        ELSE NULL
+      END AS categoria_ancla
+    FROM base_ofertas o
+    LEFT JOIN base_hubspot hs ON hs.nid = o.nid
+    LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
+    LEFT JOIN base_cierres_col c ON c.nid = o.nid
+    """
+    df = _client().query(sql).to_dataframe()
+    for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
+                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
+
+
+def fetch_oferta_formal_col_envios_wa() -> pd.DataFrame:
+    """Envíos WA Oferta formal COL (read/delivered).
+
+    Sin filtro de template_id hasta confirmar el ID del workflow CO; acota
+    por país vía deals Colombia en HubSpot.
+    """
+    sql = """
+    WITH co_nids AS (
+      SELECT DISTINCT CAST(nid AS INT64) AS nid
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE country = 'Colombia' AND nid IS NOT NULL
+    )
+    SELECT w.nid, w.message_status, w.created_at
+    FROM `sellers-main-prod.co_rds_staging.habi_notifications_whatsapp_messages` w
+    INNER JOIN co_nids n ON CAST(w.nid AS INT64) = n.nid
+    WHERE w.message_status IN ('read', 'delivered')
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["nid"] = pd.to_numeric(df["nid"], errors="coerce").astype("Int64")
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    return df
+
+
+def fetch_oferta_formal_col_landing_tracks() -> pd.DataFrame:
+    """Eventos Segment (tracks) en https://ofertas.habi.co/<uuid>."""
+    host = OFERTA_FORMAL_COL_LANDING_HOST
+    sql = f"""
+    SELECT
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\\-]{{36}})') AS uuid,
+      event AS event_name,
+      timestamp
+    FROM `sellers-main-prod.javascript9.tracks`
+    WHERE context_page_url LIKE 'https://{host}/%'
+      AND event IS NOT NULL
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["uuid"] = df["uuid"].astype(str).str.lower()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    return df
+
+
+def fetch_oferta_formal_col_landing_events() -> pd.DataFrame:
+    """Page views agregadas por UUID en https://ofertas.habi.co/<uuid>."""
+    host = OFERTA_FORMAL_COL_LANDING_HOST
+    sql = f"""
+    SELECT
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\\-]{{36}})') AS uuid,
+      COUNT(*) AS events,
+      MIN(timestamp) AS first_seen,
+      MAX(timestamp) AS last_seen
+    FROM `sellers-main-prod.javascript9.pages`
+    WHERE context_page_url LIKE 'https://{host}/%'
+      AND REGEXP_CONTAINS(context_page_url, r'{host.replace(".", r"\\.")}/[0-9a-fA-F\\-]{{36}}')
+    GROUP BY 1
+    """
+    df = _client().query(sql).to_dataframe()
+    if not df.empty:
+        df["first_seen"] = pd.to_datetime(df["first_seen"], errors="coerce")
+        df["last_seen"] = pd.to_datetime(df["last_seen"], errors="coerce")
+        df["uuid"] = df["uuid"].astype(str).str.lower()
+    return df

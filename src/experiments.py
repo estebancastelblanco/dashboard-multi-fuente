@@ -65,6 +65,21 @@ REGISTRY: list[Experiment] = [
         ],
     ),
     Experiment(
+        slug="oferta-formal-co",
+        title="Oferta formal COL",
+        start_date="2026-02-16",
+        end_date=None,
+        design_doc_url=None,
+        results_doc_url=None,
+        page="pages/4_Oferta_Formal_CO.py",
+        description=(
+            "Experimento A/B/C en Colombia. Mide CVR de aprobado→cierre y "
+            "comportamiento en la landing ofertas.habi.co."
+        ),
+        attachments=[],
+        external_links=[],
+    ),
+    Experiment(
         slug="preoferta-temprana",
         title="Pre-Oferta",
         start_date="2026-05-07",
