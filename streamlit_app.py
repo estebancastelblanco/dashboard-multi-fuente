@@ -86,10 +86,12 @@ def _render_exp_card(exp: "Experiment") -> None:
                     continue
                 st.caption(rel)
                 body = path.read_text()
-                if path.suffix == ".sql":
-                    st.code(body, language="sql")
-                elif path.suffix in (".md", ".txt"):
-                    st.markdown(f"```\n{body}\n```")
+                    if path.suffix == ".sql":
+                        st.code(body, language="sql")
+                    elif path.suffix == ".md":
+                        st.markdown(body)
+                    elif path.suffix == ".txt":
+                        st.markdown(f"```\n{body}\n```")
                 else:
                     st.code(body)
     st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)

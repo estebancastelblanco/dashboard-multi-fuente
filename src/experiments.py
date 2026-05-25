@@ -51,14 +51,17 @@ REGISTRY: list[Experiment] = [
         title="Oferta formal MX",
         start_date="2026-05-19",
         end_date=None,
-        design_doc_url="https://docs.google.com/presentation/d/1k0vSlnw3-tc7JmVUciI50ZYhOZUqnI-ymxkGrQM0UUo/edit?slide=id.g393c5075122_1_18",
+        design_doc_url=(
+            "https://docs.google.com/presentation/d/1k0vSlnw3-tc7JmVUciI50ZYhOZUqnI-ymxkGrQM0UUo/"
+            "edit?slide=id.g3d23fbab7c6_0_0#slide=id.g3d23fbab7c6_0_0"
+        ),
         results_doc_url="https://datastudio.google.com/u/0/reporting/bff7ce66-e5a9-474c-84bf-5b1d20229970/page/p_erbc1es51d",
         page="pages/3_Oferta_Formal_MX.py",
         description=(
             "Experimento A/B/C en MX. Mide CVR de aprobado→cierre y la proporción "
             "de aprobados con respuesta del cliente por variante."
         ),
-        attachments=[],
+        attachments=["experiments/oferta_formal_mx/CHANGELOG.md"],
         external_links=[
             ("HubSpot Workflow · flow 1787460216",
              "https://app.hubspot.com/workflows/6215805/platform/flow/1787460216/edit"),
@@ -69,15 +72,21 @@ REGISTRY: list[Experiment] = [
         title="Oferta formal COL",
         start_date="2026-02-16",
         end_date=None,
-        design_doc_url=None,
+        design_doc_url=(
+            "https://docs.google.com/presentation/d/1k0vSlnw3-tc7JmVUciI50ZYhOZUqnI-ymxkGrQM0UUo/"
+            "edit?slide=id.g393c5075122_1_18"
+        ),
         results_doc_url=None,
         page="pages/4_Oferta_Formal_CO.py",
         description=(
             "Experimento A/B/C en Colombia. Mide CVR de aprobado→cierre y "
             "comportamiento en la landing ofertas.habi.co."
         ),
-        attachments=[],
-        external_links=[],
+        attachments=["experiments/oferta_formal_co/CHANGELOG.md"],
+        external_links=[
+            ("HubSpot Workflow · flow 1787179587",
+             "https://app.hubspot.com/workflows/6215805/platform/flow/1787179587/edit"),
+        ],
     ),
     Experiment(
         slug="preoferta-temprana",
