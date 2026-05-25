@@ -60,7 +60,7 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal COL…", persist="disk")
-def load_oferta_formal_col_data() -> pd.DataFrame:
+def load_oferta_formal_col_data_v2() -> pd.DataFrame:
     df = bq_src.fetch_oferta_formal_col_master()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -69,11 +69,11 @@ def load_oferta_formal_col_data() -> pd.DataFrame:
     return df
 
 
-load_abc_data = load_oferta_formal_col_data
+load_abc_data = load_oferta_formal_col_data_v2
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing COL…", persist="disk")
-def load_landing_events() -> pd.DataFrame:
+def load_landing_events_col_v2() -> pd.DataFrame:
     """Eventos en https://ofertas.habi.co/<uuid>: una fila por UUID."""
     try:
         return bq_src.fetch_oferta_formal_col_landing_events()
@@ -82,14 +82,20 @@ def load_landing_events() -> pd.DataFrame:
         return pd.DataFrame(columns=["uuid", "events", "first_seen", "last_seen"])
 
 
+load_landing_events = load_landing_events_col_v2
+
+
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos Segment landing COL…", persist="disk")
-def load_landing_tracks() -> pd.DataFrame:
+def load_landing_tracks_col_v2() -> pd.DataFrame:
     """Eventos individuales (Segment tracks) en ofertas.habi.co."""
     try:
         return bq_src.fetch_oferta_formal_col_landing_tracks()
     except Exception as exc:
         st.warning(f"BigQuery tracks: {type(exc).__name__}: {exc}")
         return pd.DataFrame(columns=["uuid", "event_name", "timestamp"])
+
+
+load_landing_tracks = load_landing_tracks_col_v2
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · envíos WhatsApp COL…", persist="disk")
@@ -162,16 +168,19 @@ if df.empty:
 if "equipo_sellers" not in df.columns:
     df["equipo_sellers"] = pd.Series(dtype=str)
 
-# Pipelines operativos COL — ampliar cuando se confirmen los IDs en HubSpot.
-PIPELINE_LABELS: dict[str, str] = {}
-if "pipeline" not in df.columns:
-    df["pipeline"] = pd.Series(dtype=str)
-df["pipeline_label"] = (
-    df["pipeline"].astype(str).map(PIPELINE_LABELS).fillna("(otro)")
+if "negocio_aplica_para_bnpl" not in df.columns:
+    df["negocio_aplica_para_bnpl"] = "No"
+df["negocio_aplica_para_bnpl"] = (
+    df["negocio_aplica_para_bnpl"].fillna("No").astype(str).str.strip().replace("", "No")
 )
+df.loc[~df["negocio_aplica_para_bnpl"].str.lower().isin(["sí", "si"]), "negocio_aplica_para_bnpl"] = "No"
+df.loc[df["negocio_aplica_para_bnpl"].str.lower().isin(["sí", "si"]), "negocio_aplica_para_bnpl"] = "Sí"
+
+if "deal_uuid" in df.columns:
+    df["deal_uuid"] = df["deal_uuid"].astype(str).str.strip().str.lower()
+    df.loc[df["deal_uuid"].isin(["", "nan", "none"]), "deal_uuid"] = pd.NA
 
 # Normalizar variante: NULL → "(sin variante)" para que isin() funcione
-# directo en todas las secciones.
 df["abc_test_landing_co"] = df["abc_test_landing_co"].fillna(NULL_VARIANT_LABEL)
 df.loc[df["abc_test_landing_co"].astype(str).str.strip() == "", "abc_test_landing_co"] = NULL_VARIANT_LABEL
 
@@ -236,14 +245,12 @@ with st.sidebar:
         help="Filtra por equipo_sellers de detalle_ofertas_col.",
     )
 
-    st.markdown("### Pipeline")
-    pipeline_opts = list(PIPELINE_LABELS.values()) + ["(otro)"]
-    pipeline_default = pipeline_opts
-    sel_pipelines = st.multiselect(
-        "pipelines", pipeline_opts, default=pipeline_default,
+    st.markdown("### Aplica BNPL")
+    BNPL_OPTS = ["Sí", "No"]
+    sel_bnpl = st.multiselect(
+        "bnpl", BNPL_OPTS, default=BNPL_OPTS,
         label_visibility="collapsed",
-        help="Los deals sin pipeline asignado SIEMPRE pasan. "
-             "Agrega pipelines operativos COL a PIPELINE_LABELS cuando se confirmen.",
+        help="HubSpot · negocio_aplica_para_bnpl (Sí / No).",
     )
     st.markdown("---")
 
@@ -259,11 +266,8 @@ if sel_nid:
     df = df[df["nid"].astype(str) == sel_nid].copy()
 if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
-# Pipeline: los rows con pipeline NULL (= "(sin variante)" del LEFT JOIN sin
-# match en base_hubspot) SIEMPRE pasan, independiente de la selección. El
-# filtro solo descarta rows con pipeline asignado que NO esté en sel_pipelines.
-_pipeline_null = df["pipeline"].isna() | (df["pipeline"].astype(str).str.lower().isin(["", "nan", "none"]))
-df = df[_pipeline_null | df["pipeline_label"].isin(sel_pipelines)].copy()
+if sel_bnpl and len(sel_bnpl) < len(BNPL_OPTS):
+    df = df[df["negocio_aplica_para_bnpl"].isin(sel_bnpl)].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
@@ -519,7 +523,10 @@ with col_pie_int:
     eventos_por_var = []
     for v in sel_variants:
         sub_deals = df_section3[df_section3["abc_test_landing_co"] == v]
-        uuids_v = set(sub_deals["deal_uuid"].dropna().astype(str).str.lower())
+        uuids_v = {
+            u for u in sub_deals["deal_uuid"].dropna().astype(str).str.lower()
+            if u and u not in ("nan", "none")
+        }
         eventos_v = df_events[df_events["uuid"].isin(uuids_v)]["events"].sum() if not df_events.empty else 0
         eventos_por_var.append({"Variante": v, "Eventos": int(eventos_v)})
     g_ev = pd.DataFrame(eventos_por_var)
@@ -873,6 +880,7 @@ show_cols = [
     ("abc_test_landing_co", "abc_test_landing_co"),
     ("nid", "nid"),
     ("equipo_sellers", "equipo_sellers"),
+    ("negocio_aplica_para_bnpl", "Aplica BNPL"),
     ("hubspot_owner_id", "hubspot_owner_id"),
     ("owner_name", "Propietario"),
     ("estado_aprobado", "estado_aprobado"),

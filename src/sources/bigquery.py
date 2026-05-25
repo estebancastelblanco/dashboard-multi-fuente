@@ -535,18 +535,23 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
         CAST(d.nid AS INT64) AS nid,
         d.abc_test_landing_co,
         d.ab_test_landing,
-        LOWER(d.deal_uuid) AS deal_uuid,
+        LOWER(NULLIF(TRIM(d.deal_uuid), '')) AS deal_uuid,
         d.pipeline,
         d.hubspot_owner_id,
         TRIM(CONCAT(IFNULL(o.first_name, ''), ' ', IFNULL(o.last_name, ''))) AS owner_name,
         SAFE_CAST(d.precio_comite AS FLOAT64) AS precio_comite,
         SAFE_CAST(d.ask_price_despues__de_remodelacion AS FLOAT64) AS customer_price,
-        SAFE_CAST(d.precio_comite_final_final_final__el_unico____clonada_ AS FLOAT64) AS oferta_final_calculada
+        SAFE_CAST(d.precio_comite_final_final_final__el_unico____clonada_ AS FLOAT64) AS oferta_final_calculada,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(d.negocio_aplica_para_bnpl_, d.negocio_aplica_para_bnpl, '')))
+               IN ('sí', 'si', 'true', 'yes', '1') THEN 'Sí'
+          ELSE 'No'
+        END AS negocio_aplica_para_bnpl
       FROM `sellers-main-prod.hubspot.deals` d
       LEFT JOIN `sellers-main-prod.hubspot.owners` o
         ON LOWER(o.email) = LOWER(d.hubspot_owner_id)
         OR CAST(o.id AS STRING) = CAST(d.hubspot_owner_id AS STRING)
-      WHERE d.country = 'Colombia'
+      WHERE LOWER(TRIM(COALESCE(d.country, ''))) IN ('colombia', 'co')
     ),
     pasaron_ofertados AS (
       SELECT
@@ -575,6 +580,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       hs.pipeline,
       hs.hubspot_owner_id,
       hs.owner_name,
+      hs.negocio_aplica_para_bnpl,
       o.equipo_sellers,
       o.estado_aprobado,
       o.fecha_aprobado,
@@ -629,37 +635,43 @@ def fetch_oferta_formal_col_envios_wa() -> pd.DataFrame:
 
 
 def fetch_oferta_formal_col_landing_tracks() -> pd.DataFrame:
-    """Eventos Segment (tracks) en https://ofertas.habi.co/<uuid>."""
-    host = OFERTA_FORMAL_COL_LANDING_HOST
-    sql = f"""
+    """Eventos Segment (tracks) en https://ofertas.habi.co/<uuid>.
+
+    Misma tabla y patrón que MX; solo cambia el host de la landing.
+    """
+    sql = r"""
     SELECT
-      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\\-]{{36}})') AS uuid,
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
       event AS event_name,
       timestamp
     FROM `sellers-main-prod.javascript9.tracks`
-    WHERE context_page_url LIKE 'https://{host}/%'
+    WHERE context_page_url LIKE 'https://ofertas.habi.co/%'
       AND event IS NOT NULL
     """
     df = _client().query(sql).to_dataframe()
     if not df.empty:
+        df = df[df["uuid"].notna()].copy()
         df["uuid"] = df["uuid"].astype(str).str.lower()
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     return df
 
 
 def fetch_oferta_formal_col_landing_events() -> pd.DataFrame:
-    """Page views agregadas por UUID en https://ofertas.habi.co/<uuid>."""
-    host = OFERTA_FORMAL_COL_LANDING_HOST
-    sql = f"""
+    """Page views agregadas por UUID en https://ofertas.habi.co/<uuid>.
+
+    Misma tabla y patrón que MX; solo cambia el host de la landing.
+    """
+    sql = r"""
     SELECT
-      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\\-]{{36}})') AS uuid,
+      REGEXP_EXTRACT(context_page_url, r'([0-9a-fA-F\-]{36})') AS uuid,
       COUNT(*) AS events,
       MIN(timestamp) AS first_seen,
       MAX(timestamp) AS last_seen
     FROM `sellers-main-prod.javascript9.pages`
-    WHERE context_page_url LIKE 'https://{host}/%'
-      AND REGEXP_CONTAINS(context_page_url, r'{host.replace(".", r"\\.")}/[0-9a-fA-F\\-]{{36}}')
+    WHERE context_page_url LIKE 'https://ofertas.habi.co/%'
+      AND REGEXP_CONTAINS(context_page_url, r'habi\.co/[0-9a-fA-F\-]{36}')
     GROUP BY 1
+    HAVING uuid IS NOT NULL
     """
     df = _client().query(sql).to_dataframe()
     if not df.empty:
