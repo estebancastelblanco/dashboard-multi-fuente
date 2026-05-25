@@ -543,7 +543,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
         SAFE_CAST(d.ask_price_despues__de_remodelacion AS FLOAT64) AS customer_price,
         SAFE_CAST(d.precio_comite_final_final_final__el_unico____clonada_ AS FLOAT64) AS oferta_final_calculada,
         CASE
-          WHEN LOWER(TRIM(COALESCE(d.negocio_aplica_para_bnpl_, d.negocio_aplica_para_bnpl, '')))
+          WHEN LOWER(TRIM(COALESCE(d.negocio_aplica_para_bnpl_, '')))
                IN ('sí', 'si', 'true', 'yes', '1') THEN 'Sí'
           ELSE 'No'
         END AS negocio_aplica_para_bnpl

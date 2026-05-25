@@ -60,7 +60,7 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal COL…", persist="disk")
-def load_oferta_formal_col_data_v2() -> pd.DataFrame:
+def load_oferta_formal_col_data_v3() -> pd.DataFrame:
     df = bq_src.fetch_oferta_formal_col_master()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -69,7 +69,7 @@ def load_oferta_formal_col_data_v2() -> pd.DataFrame:
     return df
 
 
-load_abc_data = load_oferta_formal_col_data_v2
+load_abc_data = load_oferta_formal_col_data_v3
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing COL…", persist="disk")
@@ -485,6 +485,7 @@ else:
 # y los filtros de nid / equipo_sellers ya aplicados arriba.
 # ─────────────────────────────────────────────────────────────────────────────
 df_events = load_landing_events()
+df_tracks_all = load_landing_tracks()
 df_logs = load_landing_logs()
 
 # df_apro ya viene filtrado por variante + fecha_aprobado + nid + equipo
@@ -518,7 +519,8 @@ with col_pie:
         )
         st.plotly_chart(fig_pie, use_container_width=True, key="pie_variante")
 
-# Interacciones por UUID — cruce variante × eventos BQ
+# Interacciones por UUID — cruce variante × tracks Segment (misma fuente
+# que "Comportamiento en la landing"; pages suele quedar vacío en COL).
 with col_pie_int:
     eventos_por_var = []
     for v in sel_variants:
@@ -527,8 +529,12 @@ with col_pie_int:
             u for u in sub_deals["deal_uuid"].dropna().astype(str).str.lower()
             if u and u not in ("nan", "none")
         }
-        eventos_v = df_events[df_events["uuid"].isin(uuids_v)]["events"].sum() if not df_events.empty else 0
-        eventos_por_var.append({"Variante": v, "Eventos": int(eventos_v)})
+        if not df_tracks_all.empty and uuids_v:
+            tr_v = df_tracks_all[df_tracks_all["uuid"].isin(uuids_v)]
+            eventos_v = int(len(tr_v))
+        else:
+            eventos_v = 0
+        eventos_por_var.append({"Variante": v, "Eventos": eventos_v})
     g_ev = pd.DataFrame(eventos_por_var)
     if g_ev["Eventos"].sum() == 0:
         st.info("Sin eventos en BQ para las variantes seleccionadas.")
@@ -540,7 +546,7 @@ with col_pie_int:
         ))
         fig_ev.update_layout(
             paper_bgcolor=WHITE, plot_bgcolor=WHITE,
-            title=dict(text="Eventos de landing por variante",
+            title=dict(text="Eventos Segment por variante",
                        font=dict(size=13, color=DEEP)),
             font=dict(family="Inter, sans-serif", color=DEEP, size=11),
             height=320, margin=dict(l=10, r=10, t=44, b=10),
@@ -616,7 +622,7 @@ st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Comportamiento en la landing</h2>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-df_tracks = load_landing_tracks()
+df_tracks = df_tracks_all
 
 if df_tracks.empty or not universe_uuids_abc:
     st.info("Sin eventos Segment para el universo seleccionado.")
@@ -943,22 +949,18 @@ else:
     owners_base.loc[owners_base["owner_id"].isin(["", "nan", "None", "NaN"]),
                     "owner_label"] = "(sin propietario)"
 
-    # Cruces con eventos / sheet
-    deal_uuid_lower = df_apro["deal_uuid"].astype(str).str.lower()
-    uuid_to_owner = dict(zip(deal_uuid_lower, owners_base.set_index("nid").loc[
-        df_apro["nid"].map(lambda x: x if x in owners_base["nid"].values else None).dropna()
-    ]["owner_label"].values if not owners_base.empty else []))
-
-    # Forma más simple: agrupar manualmente
     owner_rows = []
     for owner_label, g_own in owners_base.groupby("owner_label"):
-        nids = g_own["nid"].tolist()
-        uuids = set(g_own["deal_uuid"].dropna().astype(str).str.lower())
+        uuids = {
+            u for u in g_own["deal_uuid"].dropna().astype(str).str.lower()
+            if u and u not in ("nan", "none")
+        }
         n_negocios = len(g_own)
-        # cuántos UUIDs abrieron (al menos 1 evento page en BQ)
-        if not df_events.empty:
-            n_abrieron = int(df_events[df_events["uuid"].isin(uuids)]["uuid"].nunique())
-            n_interacciones = int(df_events[df_events["uuid"].isin(uuids)]["events"].sum())
+        # Tracks Segment (misma fuente que Comportamiento en la landing).
+        if not df_tracks_all.empty and uuids:
+            tr = df_tracks_all[df_tracks_all["uuid"].isin(uuids)]
+            n_abrieron = int(tr["uuid"].nunique())
+            n_interacciones = int(len(tr))
         else:
             n_abrieron = 0
             n_interacciones = 0
@@ -1044,7 +1046,7 @@ else:
             f"{len(matriz)} propietarios · "
             f"{int(matriz['Negocios con landing'].sum())} negocios totales · "
             f"{int(matriz['Abrieron landing'].sum())} abrieron · "
-            f"{int(matriz['Interacciones'].sum())} interacciones (page views)."
+            f"{int(matriz['Interacciones'].sum())} interacciones (tracks Segment)."
         )
 
 
