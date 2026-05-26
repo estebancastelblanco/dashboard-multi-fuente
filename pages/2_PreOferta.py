@@ -466,6 +466,12 @@ n_asig = int(df_t_f["asignado"].sum())
 # arriba porque los gráficos posteriores las consumen.
 
 
+# Paleta verde del tratamiento (embudo principal + comparativa A/B · B).
+PALETTE_TRATAMIENTO = [
+    GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
+    "#7eb37e", GREEN_LIGHT, "#cce4ce", "#86efac", "#a7f3b0", "#dcfce7",
+]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel 1 · general del tratamiento (universo → cierre)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,8 +530,6 @@ f_sources = [s[2] for s in stages]
 # Bar horizontal con escala log: cuando un paso tiene 500 y el siguiente 2, el
 # funnel tradicional aplasta visualmente las etapas finales. La escala log
 # preserva el contraste y permite ver el cierre incluso con 1 lead.
-palette = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE,
-           GREEN_LIGHT, "#7eb37e", GREEN_DARK]
 f_text = [
     f"{v:,}" + (f"  ·  {v/f_vals[i-1]*100:.0f}% CVR" if i > 0 and f_vals[i-1] > 0 else "")
     for i, v in enumerate(f_vals)
@@ -534,7 +538,7 @@ nonzero = [v for v in f_vals if v > 0]
 use_log = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
 fig_funnel = go.Figure(go.Bar(
     x=f_vals, y=f_labels, orientation="h",
-    marker_color=palette[:len(stages)],
+    marker_color=PALETTE_TRATAMIENTO[:len(stages)],
     text=f_text,
     textposition="outside", textfont=dict(size=11, color=DEEP),
     customdata=f_sources,
@@ -671,8 +675,6 @@ def _funnel_chart(values: list[int], title: str, palette: list[str]):
 
 # Control (A) izquierda · Tratamiento (B) derecha
 PALETTE_CONTROL = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE, "#c4b5fd"]
-PALETTE_TRATAMIENTO = [GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
-                       "#7eb37e", GREEN_LIGHT, "#cce4ce", "#86efac"]
 with col_c:
     st.plotly_chart(
         _funnel_chart(vals_c, "A · Control (sin pre-oferta)", PALETTE_CONTROL),
