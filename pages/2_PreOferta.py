@@ -94,6 +94,7 @@ PIPELINE_DESTINO = "731899270"   # Sellers - Market Maker MX (NUEVO) — meta
 DEALSTAGE_ASIGNADO = "1066429804"
 MAX_DIAS_SIN_ASIGNAR = 4         # del diseño: si pasaron 4 dias debe asignarse si o si
 MAX_ENVIOS = 4                   # workflow HubSpot manda 4 plantillas (dia 1..4)
+SHOW_PIPELINE_NO_ASIGNADOS = False  # oculto temporalmente; kanban más abajo
 
 # Estados (propiedad `estado`) que SI permiten asignar al market maker.
 # Cualquier otro estado significa que el deal no debe asignarse aun (esta
@@ -1053,61 +1054,6 @@ for n in range(1, MAX_ENVIOS + 1):
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline de no-asignados · kanban estilo CRM
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown(
-    f"<h2>Pipeline de no-asignados · alerta &gt; {MAX_DIAS_SIN_ASIGNAR} días</h2>",
-    unsafe_allow_html=True,
-)
-
-# IMPORTANTE: ignoramos filtros del sidebar — queremos ver TODO lo no asignado.
-df_no_asig_all = df_t[df_t["pipeline"].astype(str) == PIPELINE_ORIGEN].copy()
-df_no_asig_all = df_no_asig_all.sort_values("dias_desde_creacion", ascending=False)
-
-# Layout dos columnas: filtro a la izquierda + kanban a la derecha
-side_col, board_col = st.columns([1, 5])
-
-with side_col:
-    st.markdown(
-        f"<div style='color:{MED};font-weight:600;font-size:0.75rem;"
-        f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px'>"
-        f"Filtro</div>",
-        unsafe_allow_html=True,
-    )
-    kanban_mode = st.radio(
-        "kanban_mode",
-        ["Asignables", "No asignables"],
-        index=0,
-        label_visibility="collapsed",
-    )
-
-    if kanban_mode == "Asignables":
-        df_kanban = df_no_asig_all[df_no_asig_all["es_asignable_estado"]].copy()
-        cols_order: list[tuple[str, str]] = list(ESTADOS_ASIGNABLES.items())
-    else:
-        df_kanban = df_no_asig_all[~df_no_asig_all["es_asignable_estado"]].copy()
-        # Una columna por estado encontrado (top 6 para no saturar)
-        top_estados = (
-            df_kanban["estado_code"].fillna("").value_counts().head(6).index.tolist()
-        )
-        cols_order = [
-            (code, estado_options.get(code, code) or "(sin estado)")
-            for code in top_estados
-        ]
-
-    n_kanban = len(df_kanban)
-    n_urgentes_k = int((df_kanban["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
-    prom_dias_k = float(df_kanban["dias_desde_creacion"].mean()) if n_kanban else 0.0
-    st.markdown(kpi_card("Total", f"{n_kanban:,}", f"{kanban_mode.lower()}"),
-                unsafe_allow_html=True)
-    st.markdown(_alarm_card(
-        f"Urgentes ≥ {MAX_DIAS_SIN_ASIGNAR}d",
-        f"{n_urgentes_k:,}",
-        "deben moverse hoy",
-        n_urgentes_k > 0,
-    ), unsafe_allow_html=True)
-    st.markdown(kpi_card("Días promedio", f"{prom_dias_k:.1f}",
-                         "desde creación"), unsafe_allow_html=True)
-
-
 def _kanban_card(row) -> str:
     """Card estilo Pipefy/Trello: ID grande, estado, envios, dias sin asignar.
 
@@ -1187,63 +1133,118 @@ def _kanban_card(row) -> str:
     )
 
 
-with board_col:
-    if not cols_order or n_kanban == 0:
-        st.info(
-            "No hay deals en este filtro. "
-            + ("¡Limpio! Nada urgente sin asignar." if kanban_mode == "Asignables"
-               else "Ningún deal no-asignable en el rango.")
+if SHOW_PIPELINE_NO_ASIGNADOS:
+    st.markdown(
+        f"<h2>Pipeline de no-asignados · alerta &gt; {MAX_DIAS_SIN_ASIGNAR} días</h2>",
+        unsafe_allow_html=True,
+    )
+
+    # IMPORTANTE: ignoramos filtros del sidebar — queremos ver TODO lo no asignado.
+    df_no_asig_all = df_t[df_t["pipeline"].astype(str) == PIPELINE_ORIGEN].copy()
+    df_no_asig_all = df_no_asig_all.sort_values("dias_desde_creacion", ascending=False)
+
+    # Layout dos columnas: filtro a la izquierda + kanban a la derecha
+    side_col, board_col = st.columns([1, 5])
+
+    with side_col:
+        st.markdown(
+            f"<div style='color:{MED};font-weight:600;font-size:0.75rem;"
+            f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px'>"
+            f"Filtro</div>",
+            unsafe_allow_html=True,
         )
-    else:
-        board_cols = st.columns(len(cols_order))
-        for (code, label), col in zip(cols_order, board_cols):
-            sub = df_kanban[df_kanban["estado_code"] == code].sort_values(
-                "dias_desde_creacion", ascending=False
+        kanban_mode = st.radio(
+            "kanban_mode",
+            ["Asignables", "No asignables"],
+            index=0,
+            label_visibility="collapsed",
+        )
+
+        if kanban_mode == "Asignables":
+            df_kanban = df_no_asig_all[df_no_asig_all["es_asignable_estado"]].copy()
+            cols_order: list[tuple[str, str]] = list(ESTADOS_ASIGNABLES.items())
+        else:
+            df_kanban = df_no_asig_all[~df_no_asig_all["es_asignable_estado"]].copy()
+            # Una columna por estado encontrado (top 6 para no saturar)
+            top_estados = (
+                df_kanban["estado_code"].fillna("").value_counts().head(6).index.tolist()
             )
-            n_col = len(sub)
-            n_urg_col = int((sub["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
-            with col:
-                accent = RED if n_urg_col > 0 else PRIMARY
-                # Header columna con contador y porcentaje del filtro
-                pct_col = n_col / max(1, n_kanban) * 100
-                st.markdown(
-                    f"<div style='background:{DEEP};color:#fff;"
-                    f"padding:10px 12px;border-radius:8px 8px 0 0;"
-                    f"border-bottom:3px solid {accent};margin-bottom:10px'>"
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"align-items:flex-start;gap:8px'>"
-                    f"<div style='font-size:0.78rem;font-weight:700;"
-                    f"line-height:1.2;flex:1'>{label}</div>"
-                    f"<div style='background:{accent};color:#fff;padding:1px 7px;"
-                    f"border-radius:10px;font-size:0.7rem;font-weight:700'>{n_col}</div>"
-                    f"</div>"
-                    f"<div style='font-size:0.65rem;opacity:0.8;margin-top:4px;"
-                    f"letter-spacing:.04em'>{pct_col:.0f}% del filtro · "
-                    f"{n_urg_col} urgentes</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
+            cols_order = [
+                (code, estado_options.get(code, code) or "(sin estado)")
+                for code in top_estados
+            ]
+
+        n_kanban = len(df_kanban)
+        n_urgentes_k = int((df_kanban["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
+        prom_dias_k = float(df_kanban["dias_desde_creacion"].mean()) if n_kanban else 0.0
+        st.markdown(kpi_card("Total", f"{n_kanban:,}", f"{kanban_mode.lower()}"),
+                    unsafe_allow_html=True)
+        st.markdown(_alarm_card(
+            f"Urgentes ≥ {MAX_DIAS_SIN_ASIGNAR}d",
+            f"{n_urgentes_k:,}",
+            "deben moverse hoy",
+            n_urgentes_k > 0,
+        ), unsafe_allow_html=True)
+        st.markdown(kpi_card("Días promedio", f"{prom_dias_k:.1f}",
+                             "desde creación"), unsafe_allow_html=True)
+
+    with board_col:
+        if not cols_order or n_kanban == 0:
+            st.info(
+                "No hay deals en este filtro. "
+                + ("¡Limpio! Nada urgente sin asignar." if kanban_mode == "Asignables"
+                   else "Ningún deal no-asignable en el rango.")
+            )
+        else:
+            board_cols = st.columns(len(cols_order))
+            for (code, label), col in zip(cols_order, board_cols):
+                sub = df_kanban[df_kanban["estado_code"] == code].sort_values(
+                    "dias_desde_creacion", ascending=False
                 )
-                if n_col == 0:
+                n_col = len(sub)
+                n_urg_col = int((sub["dias_desde_creacion"] >= MAX_DIAS_SIN_ASIGNAR).sum())
+                with col:
+                    accent = RED if n_urg_col > 0 else PRIMARY
+                    # Header columna con contador y porcentaje del filtro
+                    pct_col = n_col / max(1, n_kanban) * 100
                     st.markdown(
-                        f"<div style='background:{WHITE};border:1px dashed #d9cfee;"
-                        f"border-radius:8px;color:{MED};font-size:0.72rem;"
-                        f"font-style:italic;padding:14px;text-align:center'>"
-                        f"Sin deals en este estado</div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    # Contenedor con scroll vertical estilo Pipefy: todas las
-                    # cards quedan adentro y el usuario hace scroll dentro de
-                    # la columna sin saturar la página.
-                    cards_html = "".join(_kanban_card(row) for _, row in sub.iterrows())
-                    st.markdown(
-                        f"<div style='max-height:70vh;overflow-y:auto;"
-                        f"padding-right:6px;scrollbar-width:thin;"
-                        f"scrollbar-color:{MED} {PALE}'>"
-                        f"{cards_html}"
+                        f"<div style='background:{DEEP};color:#fff;"
+                        f"padding:10px 12px;border-radius:8px 8px 0 0;"
+                        f"border-bottom:3px solid {accent};margin-bottom:10px'>"
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"align-items:flex-start;gap:8px'>"
+                        f"<div style='font-size:0.78rem;font-weight:700;"
+                        f"line-height:1.2;flex:1'>{label}</div>"
+                        f"<div style='background:{accent};color:#fff;padding:1px 7px;"
+                        f"border-radius:10px;font-size:0.7rem;font-weight:700'>{n_col}</div>"
+                        f"</div>"
+                        f"<div style='font-size:0.65rem;opacity:0.8;margin-top:4px;"
+                        f"letter-spacing:.04em'>{pct_col:.0f}% del filtro · "
+                        f"{n_urg_col} urgentes</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    if n_col == 0:
+                        st.markdown(
+                            f"<div style='background:{WHITE};border:1px dashed #d9cfee;"
+                            f"border-radius:8px;color:{MED};font-size:0.72rem;"
+                            f"font-style:italic;padding:14px;text-align:center'>"
+                            f"Sin deals en este estado</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        # Contenedor con scroll vertical estilo Pipefy: todas las
+                        # cards quedan adentro y el usuario hace scroll dentro de
+                        # la columna sin saturar la página.
+                        cards_html = "".join(_kanban_card(row) for _, row in sub.iterrows())
+                        st.markdown(
+                            f"<div style='max-height:70vh;overflow-y:auto;"
+                            f"padding-right:6px;scrollbar-width:thin;"
+                            f"scrollbar-color:{MED} {PALE}'>"
+                            f"{cards_html}"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
