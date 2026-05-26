@@ -466,11 +466,27 @@ n_asig = int(df_t_f["asignado"].sum())
 # arriba porque los gráficos posteriores las consumen.
 
 
-# Paleta verde del tratamiento (embudo principal + comparativa A/B · B).
-PALETTE_TRATAMIENTO = [
-    GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
-    "#7eb37e", GREEN_LIGHT, "#cce4ce", "#86efac", "#a7f3b0", "#dcfce7",
+# Colores por etapa canónica: las fases compartidas entre el embudo del
+# experimento y la comparativa A/B · B usan exactamente el mismo tono.
+FUNNEL_STAGE_COLORS: dict[str, str] = {
+    "universe":      GREEN_DARK,
+    "enviados_wa":   "#123d22",   # solo embudo experimento
+    "abrieron_link": "#15472a",   # solo embudo experimento
+    "asignacion":    "#0f5535",
+    "cita":          "#1f7a2a",
+    "visita":        "#2e8b3a",
+    "pre_comite":    "#4daa5a",
+    "aprobado":      "#7eb37e",
+    "oferta":        GREEN_LIGHT,
+    "acepto":        "#cce4ce",
+    "cierre":        "#86efac",
+}
+
+COMPARE_STAGE_KEYS = [
+    "universe", "asignacion", "cita", "visita", "pre_comite",
+    "aprobado", "oferta", "acepto", "cierre",
 ]
+PALETTE_TRATAMIENTO = [FUNNEL_STAGE_COLORS[k] for k in COMPARE_STAGE_KEYS]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Funnel 1 · general del tratamiento (universo → cierre)
@@ -510,23 +526,24 @@ n_aceptada = _count_stage("Acepto Oferta - Pendiente firma")
 n_cierre = _count_stages_union(["Cierre - Comprado", "Cierre  OCD"])
 
 # Embudo general (sin interacciones CTA: las ves en KPIs + filtro sidebar).
-stages = [
-    ("Universo (Seller MX)",            n_universo,         "HubSpot · contacto_digital=seller"),
-    ("Enviados WA",                     n_wa,               f"Estimado · {int(WA_DELIVERY*100)}% × Universo"),
-    ("Abrieron link",                   n_opened,           "Sheets LOGS · dedup por uuid"),
-    ("Asignados",                       n_asig,             "pipeline = Market Maker MX (NUEVO)"),
-    ("Cita Agendada",                   n_cita_agendada,    "BQ · Cita Agendada (hubspot)"),
-    ("Visita Efectuada",                n_visita,           "BQ · Visita Efectuada (hubspot)"),
-    ("Pre-comité validado",             n_pre_comite,       "BQ · Pre-comite validado"),
-    ("Aprobado General",                n_aprobado,         "BQ · Aprobado General"),
-    ("Pendiente respuesta oferta",      n_pendiente_oferta, "BQ · Pendiente respuesta oferta"),
-    ("Acepto oferta · pendiente firma", n_aceptada,         "BQ · Acepto Oferta - Pendiente firma"),
-    ("Cierre",                          n_cierre,           "BQ · Cierre - Comprado + Cierre OCD"),
+stages: list[tuple[str, int, str, str]] = [
+    ("Universo (Seller MX)",            n_universo,         "HubSpot · contacto_digital=seller", "universe"),
+    ("Enviados WA",                     n_wa,               f"Estimado · {int(WA_DELIVERY*100)}% × Universo", "enviados_wa"),
+    ("Abrieron link",                   n_opened,           "Sheets LOGS · dedup por uuid", "abrieron_link"),
+    ("Asignados",                       n_asig,             "pipeline = Market Maker MX (NUEVO)", "asignacion"),
+    ("Cita Agendada",                   n_cita_agendada,    "BQ · Cita Agendada (hubspot)", "cita"),
+    ("Visita Efectuada",                n_visita,           "BQ · Visita Efectuada (hubspot)", "visita"),
+    ("Pre-comité validado",             n_pre_comite,       "BQ · Pre-comite validado", "pre_comite"),
+    ("Aprobado General",                n_aprobado,         "BQ · Aprobado General", "aprobado"),
+    ("Pendiente respuesta oferta",      n_pendiente_oferta, "BQ · Pendiente respuesta oferta", "oferta"),
+    ("Acepto oferta · pendiente firma", n_aceptada,         "BQ · Acepto Oferta - Pendiente firma", "acepto"),
+    ("Cierre",                          n_cierre,           "BQ · Cierre - Comprado + Cierre OCD", "cierre"),
 ]
 
 f_labels = [s[0] for s in stages]
 f_vals = [s[1] for s in stages]
 f_sources = [s[2] for s in stages]
+f_colors = [FUNNEL_STAGE_COLORS[s[3]] for s in stages]
 # Bar horizontal con escala log: cuando un paso tiene 500 y el siguiente 2, el
 # funnel tradicional aplasta visualmente las etapas finales. La escala log
 # preserva el contraste y permite ver el cierre incluso con 1 lead.
@@ -538,7 +555,7 @@ nonzero = [v for v in f_vals if v > 0]
 use_log = (max(f_vals) if f_vals else 0) > 100 and (min(nonzero) if nonzero else 0) > 0
 fig_funnel = go.Figure(go.Bar(
     x=f_vals, y=f_labels, orientation="h",
-    marker_color=PALETTE_TRATAMIENTO[:len(stages)],
+    marker_color=f_colors,
     text=f_text,
     textposition="outside", textfont=dict(size=11, color=DEEP),
     customdata=f_sources,
