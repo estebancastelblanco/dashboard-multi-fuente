@@ -485,13 +485,23 @@ def _count_stage(stage: str) -> int:
     return int(sub[sub["nid"].isin(nids_f)]["nid"].nunique())
 
 
+def _count_stages_union(stages: list[str]) -> int:
+    """Nids únicos que pasaron por al menos una de las etapas (sin doble contar)."""
+    if df_funnel.empty:
+        return 0
+    sub = df_funnel[df_funnel["valor"].isin(stages)]
+    if nids_f:
+        sub = sub[sub["nid"].isin(nids_f)]
+    return int(sub["nid"].nunique())
+
+
 n_cita_agendada = _count_stage("Cita Agendada (hubspot)")
 n_visita = _count_stage("Visita Efectuada (hubspot)")
 n_pre_comite = _count_stage("Pre-comite validado")
 n_aprobado = _count_stage("Aprobado General")
 n_pendiente_oferta = _count_stage("Pendiente respuesta oferta")
 n_aceptada = _count_stage("Acepto Oferta - Pendiente firma")
-n_cierre = _count_stage("Cierre - Comprado") + _count_stage("Cierre  OCD")
+n_cierre = _count_stages_union(["Cierre - Comprado", "Cierre  OCD"])
 
 # Embudo general (sin interacciones CTA: las ves en KPIs + filtro sidebar).
 stages = [
@@ -570,33 +580,50 @@ COMPARE_STAGES: list[tuple[str, list[str] | str]] = [
     ("Pre-comité",       ["Pre-comite validado"]),
     ("Aprobado",         ["Aprobado General"]),
     ("Oferta",           ["Pendiente respuesta oferta"]),
+    ("Acepto · pendiente firma", ["Acepto Oferta - Pendiente firma"]),
     ("Cierre",           ["Cierre - Comprado", "Cierre  OCD"]),
 ]
 
 
-def _count_stages_for_group(df_ab: pd.DataFrame, grupo: str, stages: list[str]) -> int:
+def _count_stages_for_group(
+    df_ab: pd.DataFrame,
+    grupo: str,
+    stages: list[str],
+    *,
+    nids_only: set[int] | None = None,
+) -> int:
     if df_ab.empty:
         return 0
     sub = df_ab[(df_ab["grupo"] == grupo) & (df_ab["valor"].isin(stages))]
+    if nids_only is not None:
+        sub = sub[sub["nid"].isin(nids_only)]
     return int(sub["nid"].nunique())
 
 
-def _build_funnel_counts(df_ab: pd.DataFrame, grupo: str) -> list[int]:
-    # Universo = total de nids distintos del grupo (con o sin etapas en funnel)
-    universe = int(df_ab[df_ab["grupo"] == grupo]["nid"].nunique()) if not df_ab.empty else 0
+def _build_funnel_counts(
+    df_ab: pd.DataFrame,
+    grupo: str,
+    *,
+    nids_only: set[int] | None = None,
+) -> list[int]:
+    df_g = df_ab[df_ab["grupo"] == grupo]
+    if nids_only is not None:
+        df_g = df_g[df_g["nid"].isin(nids_only)]
+    universe = int(df_g["nid"].nunique()) if not df_g.empty else 0
     counts: list[int] = []
     for _label, stages in COMPARE_STAGES:
         if stages == "_universe":
             counts.append(universe)
         elif isinstance(stages, list):
-            counts.append(_count_stages_for_group(df_ab, grupo, stages))
+            counts.append(_count_stages_for_group(df_ab, grupo, stages, nids_only=nids_only))
         else:
-            counts.append(_count_stages_for_group(df_ab, grupo, [stages]))
+            counts.append(_count_stages_for_group(df_ab, grupo, [stages], nids_only=nids_only))
     return counts
 
 
 vals_c = _build_funnel_counts(df_ab, "A")
-vals_t = _build_funnel_counts(df_ab, "B")
+# Tratamiento B: mismo cohorte de nids que el embudo superior (df_t_f + funnel BQ).
+vals_t = _build_funnel_counts(df_ab, "B", nids_only=nids_f if nids_f else None)
 
 col_c, col_t = st.columns(2)
 labels = [s[0] for s in COMPARE_STAGES]
@@ -631,7 +658,7 @@ def _funnel_chart(values: list[int], title: str, palette: list[str]):
         title=dict(text=title, font=dict(size=13, color=DEEP, family="Inter")),
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
         font=dict(family="Inter, sans-serif", color=DEEP, size=10),
-        height=420, margin=dict(l=10, r=240, t=44, b=10),
+        height=460, margin=dict(l=10, r=240, t=44, b=10),
         xaxis=dict(
             type="log" if use_log else "linear",
             title="Leads" + (" (log)" if use_log else ""),
@@ -643,9 +670,9 @@ def _funnel_chart(values: list[int], title: str, palette: list[str]):
 
 
 # Control (A) izquierda · Tratamiento (B) derecha
-PALETTE_CONTROL = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE]
+PALETTE_CONTROL = [DEEP, "#3a1956", PRIMARY, MED, ACCENT, LIGHT, "#bd8be3", PALE, "#c4b5fd"]
 PALETTE_TRATAMIENTO = [GREEN_DARK, "#0f5535", "#1f7a2a", "#2e8b3a", "#4daa5a",
-                       "#7eb37e", GREEN_LIGHT, "#cce4ce"]
+                       "#7eb37e", GREEN_LIGHT, "#cce4ce", "#86efac"]
 with col_c:
     st.plotly_chart(
         _funnel_chart(vals_c, "A · Control (sin pre-oferta)", PALETTE_CONTROL),
