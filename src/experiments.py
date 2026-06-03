@@ -107,4 +107,23 @@ REGISTRY: list[Experiment] = [
             "landing_sheet_id": "1_EMQesd_n67wSqReYaTdJtSd3uvZsb7GXPRD6LyrJN4",
         },
     ),
+    Experiment(
+        slug="tramites-bnpl-vda",
+        title="Trámites BNPL · Valle de Aburrá",
+        start_date="2026-06-02",
+        end_date=None,
+        design_doc_url=(
+            "https://docs.google.com/presentation/d/1k0vSlnw3-tc7JmVUciI50ZYhOZUqnI-ymxkGrQM0UUo/"
+            "edit?slide=id.g3cfe35e73dd_0_82#slide=id.g3cfe35e73dd_0_82"
+        ),
+        results_doc_url=None,
+        page="pages/5_Tramites_BNPL_VdA.py",
+        description=(
+            "A/B 50/50 en la landing (ofertas.habi.co) para negocios BNPL del "
+            "Valle de Aburrá. A = control (no muestra la sección 'Trámites y "
+            "notarías'); B = tratamiento (sí la muestra). Comparativa de CVR "
+            "aprobado → cierre por variante."
+        ),
+        attachments=[],
+    ),
 ]
