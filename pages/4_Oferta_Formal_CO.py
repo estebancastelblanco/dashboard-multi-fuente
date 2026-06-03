@@ -50,13 +50,16 @@ st.markdown(
 
 DAY = 86400
 
-VARIANTS = ["A", "B", "C", "(sin variante)"]
+VARIANTS = ["A", "B", "C", "D", "(sin variante)"]
 NULL_VARIANT_LABEL = "(sin variante)"
 COLOR_APROBADOS = PRIMARY
 COLOR_APROBADOS_RTA = ACCENT
 COLOR_CIERRE = LIGHT
 COLOR_CVR = "#84cc16"           # verde-amarillo
 COLOR_CVR_RTA = "#06b6d4"       # cyan
+# Paleta por-variante (pie + barras de eventos): 1 color por categoría, en el
+# orden de VARIANTS (A, B, C, D, (sin variante)).
+VARIANT_COLORS = [PRIMARY, ACCENT, LIGHT, MED, PALE]
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal COL…", persist="disk")
@@ -508,7 +511,7 @@ with col_pie:
     else:
         fig_pie = go.Figure(go.Pie(
             labels=v_counts["Variante"], values=v_counts["N"],
-            hole=0.42, marker_colors=[PRIMARY, ACCENT, LIGHT][:len(v_counts)],
+            hole=0.42, marker_colors=VARIANT_COLORS[:len(v_counts)],
             textinfo="label+percent+value", textfont_size=12,
         ))
         fig_pie.update_layout(
@@ -541,7 +544,7 @@ with col_pie_int:
     else:
         fig_ev = go.Figure(go.Bar(
             x=g_ev["Variante"], y=g_ev["Eventos"],
-            marker_color=[PRIMARY, ACCENT, LIGHT][:len(g_ev)],
+            marker_color=VARIANT_COLORS[:len(g_ev)],
             text=g_ev["Eventos"], textposition="outside",
         ))
         fig_ev.update_layout(
@@ -569,8 +572,8 @@ st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 df_envios = load_envios_wa()
 
 # Para el cruce de la sección "Comportamiento en la landing" (más abajo)
-# sí se mantiene el universo A/B/C porque ahí queremos comparar variantes.
-df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C"])]
+# sí se mantiene el universo de variantes (A/B/C/D) porque ahí comparamos variantes.
+df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C","D"])]
 universe_uuids_abc = set(df_section3_abc["deal_uuid"].dropna().astype(str).str.lower())
 
 # Enviados: respeta solo el rango de fechas sobre created_at

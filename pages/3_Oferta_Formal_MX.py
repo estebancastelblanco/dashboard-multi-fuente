@@ -244,9 +244,10 @@ with st.sidebar:
     sel_pipelines = st.multiselect(
         "pipelines", pipeline_opts, default=pipeline_default,
         label_visibility="collapsed",
-        help="Default: 2 pipelines operativos. Los deals sin pipeline asignado "
-             "(= '(sin variante)') SIEMPRE pasan. Agrega '(otro)' para incluir "
-             "deals con un pipeline distinto a los 2 operativos.",
+        help="Default: 2 pipelines operativos. Solo restringe deals con variante "
+             "(A/B/C); los '(sin variante)' SIEMPRE pasan (igual que Looker). "
+             "Agrega '(otro)' para incluir deals A/B/C con un pipeline distinto "
+             "a los 2 operativos.",
     )
     st.markdown("---")
 
@@ -262,11 +263,14 @@ if sel_nid:
     df = df[df["nid"].astype(str) == sel_nid].copy()
 if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
-# Pipeline: los rows con pipeline NULL (= "(sin variante)" del LEFT JOIN sin
-# match en base_hubspot) SIEMPRE pasan, independiente de la selección. El
-# filtro solo descarta rows con pipeline asignado que NO esté en sel_pipelines.
+# Pipeline: el filtro SOLO restringe deals con variante (A/B/C). Los deals
+# "(sin variante)" SIEMPRE pasan para cuadrar con Looker, que no aplica filtro
+# de pipeline. (Antes "(sin variante)" coincidía con pipeline NULL; desde que
+# el LEFT JOIN a HubSpot trae pipeline para todos los deals, hay que filtrar
+# por variante explícitamente, no por pipeline nulo.)
 _pipeline_null = df["pipeline"].isna() | (df["pipeline"].astype(str).str.lower().isin(["", "nan", "none"]))
-df = df[_pipeline_null | df["pipeline_label"].isin(sel_pipelines)].copy()
+_sin_variante = df["abc_test_landing_co"] == NULL_VARIANT_LABEL
+df = df[_sin_variante | _pipeline_null | df["pipeline_label"].isin(sel_pipelines)].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
