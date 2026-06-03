@@ -600,12 +600,33 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       WHERE propiedad = 'dealstage' AND valor = '{dealstage_ofertado}'
       GROUP BY 1
     ),
-    base_cierres_col AS (
+    base_cierres_raw AS (
       SELECT
         CAST(nid AS INT64) AS nid,
-        MIN(DATE(v_fecha_promesa)) AS v_fecha_promesa
+        DATE(v_fecha_promesa) AS v_fecha_promesa
       FROM `papyrus-master.operations_sellers_co_dwh.int_sellers_cierres_desistidos_co_dwh`
       WHERE v_fecha_promesa IS NOT NULL
+    ),
+    -- Cierre estilo query maestra COL: la promesa debe ser >= fecha_aprobado y se
+    -- toma la última (MAX) ligada a ese aprobado. (Antes se usaba MIN sin la
+    -- restricción, lo que inflaba el cierre ~+9 deals vs Looker.)
+    base_cierres_col AS (
+      SELECT o.nid, o.fecha_aprobado, c.v_fecha_promesa
+      FROM base_ofertas o
+      LEFT JOIN base_cierres_raw c ON c.nid = o.nid
+      WHERE o.fecha_aprobado <= c.v_fecha_promesa
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY o.nid, o.fecha_aprobado ORDER BY c.v_fecha_promesa DESC
+      ) = 1
+    ),
+    -- Dealstage "inmueble aprobado" (1172812203). El reporte de Looker filtra el
+    -- universo a deals que pasaron por esta etapa ("Fecha inmueble aprobado").
+    fecha_inmueble_aprobado AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(DATE(fecha)) AS fecha_inmueble_aprobado
+      FROM `sellers-main-prod.hubspot.historical`
+      WHERE propiedad = 'dealstage' AND valor = '1172812203'
       GROUP BY 1
     )
     SELECT
@@ -629,6 +650,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       c.v_fecha_promesa,
       IFNULL(o.fecha_cierre, c.v_fecha_promesa) AS fecha_cierre_efectiva,
       DATE(po.fecha_ofertado) AS fecha_ofertado,
+      fia.fecha_inmueble_aprobado,
       IF(po.nid IS NOT NULL, 'Ofertado', 'No ofertado') AS fue_ofertado,
       CASE
         WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) IS NULL THEN NULL
@@ -640,11 +662,13 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
     FROM base_ofertas o
     LEFT JOIN base_hubspot hs ON hs.nid = o.nid
     LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
-    LEFT JOIN base_cierres_col c ON c.nid = o.nid
+    LEFT JOIN base_cierres_col c ON c.nid = o.nid AND c.fecha_aprobado = o.fecha_aprobado
+    LEFT JOIN fecha_inmueble_aprobado fia ON fia.nid = o.nid
     """
     df = _client().query(sql).to_dataframe()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
-                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
+                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado",
+                "fecha_inmueble_aprobado"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
     return df

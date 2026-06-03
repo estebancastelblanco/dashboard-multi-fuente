@@ -204,7 +204,7 @@ with st.sidebar:
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
 
     st.markdown("### Rango de fechas")
-    default_start = date(2026, 2, 16)
+    default_start = date(2026, 2, 18)
     default_end = date.today()
     sel_range = st.date_input(
         "rango",
@@ -255,6 +255,14 @@ with st.sidebar:
         label_visibility="collapsed",
         help="HubSpot · negocio_aplica_para_bnpl (Sí / No).",
     )
+
+    st.markdown("### Inmueble aprobado")
+    solo_inmueble_aprobado = st.checkbox(
+        "Solo deals con inmueble aprobado", value=True,
+        help="Filtra a deals que pasaron por el dealstage 'inmueble aprobado'. "
+             "ON por defecto para cuadrar con el reporte de Looker (filtro "
+             "'Fecha inmueble aprobado'). Desactiva para ver el universo completo.",
+    )
     st.markdown("---")
 
 
@@ -271,6 +279,10 @@ if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
 if sel_bnpl and len(sel_bnpl) < len(BNPL_OPTS):
     df = df[df["negocio_aplica_para_bnpl"].isin(sel_bnpl)].copy()
+# Filtro "inmueble aprobado" (Looker: 'Fecha inmueble aprobado' = 1). Restringe a
+# deals que pasaron por ese dealstage; cuadra el bucket "(sin variante)" con Looker.
+if solo_inmueble_aprobado and "fecha_inmueble_aprobado" in df.columns:
+    df = df[df["fecha_inmueble_aprobado"].notna()].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
