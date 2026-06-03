@@ -335,24 +335,51 @@ def fetch_sellers_credit_breakdown(nids: list[int] | None = None) -> pd.DataFram
 def fetch_abc_test_landing_co() -> pd.DataFrame:
     """Tabla maestra del experimento ABC test landing CO.
 
+    Replica la lógica de la query maestra de Looker (data/query.sql) para que
+    los conteos por variante cuadren 1:1 con el reporte de Looker Studio.
+    Diferencias clave vs. versiones previas de esta función:
+      - Universo restringido igual que Looker: excluye deals con
+        ``asignacion_descartes_top`` asignado (hubspot_staging.deal) y deals
+        inmobiliaria-first (``apply_real_estate_first = true``).
+      - ``fecha_ofertado`` solo para nids presentes en tabla_inmuebles_general
+        (filtro ``ig.nid IS NOT NULL`` de Looker).
+      - ``fecha_cierre_efectiva`` = ``fecha_cierre`` de detalle_ofertas_mx;
+        ``v_fecha_promesa`` (DWH) solo se adjunta cuando ya existe fecha_cierre,
+        igual que Looker. NO se cuentan precierres sin cierre como cierre.
+      - HubSpot se une por LEFT JOIN sin filtrar country ni variante: los deals
+        sin variante caen a "(sin variante)" aguas arriba en la página.
+
     Columnas finales:
-      nid, abc_test_landing_co, ab_test_landing, estado_aprobado,
+      nid, abc_test_landing_co, ab_test_landing, deal_uuid, pipeline,
+      hubspot_owner_id, owner_name, equipo_sellers, estado_aprobado,
       fecha_aprobado, fecha_aprobado_semana, fecha_cierre, v_fecha_promesa,
       fecha_cierre_efectiva, fecha_ofertado, fue_ofertado, categoria_ancla
     """
     sql = """
     WITH
+    inmo_first AS (
+      SELECT DISTINCT ig.nid
+      FROM `papyrus-data-mx.habi_wh_sellers.deal_additional` AS da
+      LEFT JOIN `papyrus-data-mx.habi_wh_bi.tabla_inmuebles_general` AS ig
+        ON ig.id_negocio = da.deal_id
+      WHERE JSON_EXTRACT_SCALAR(da.meta, '$.apply_real_estate_first') = "true"
+        AND ig.nid IS NOT NULL
+    ),
     base_ofertas AS (
       SELECT
-        CAST(nid AS INT64) AS nid,
-        DATE(fecha_aprobado) AS fecha_aprobado,
-        DATE(fecha_cierre)   AS fecha_cierre,
-        estado_aprobado,
-        equipo_sellers
-      FROM `papyrus-data.habi_wh.detalle_ofertas_mx`
-      WHERE fecha_aprobado IS NOT NULL
+        CAST(dox.nid AS INT64) AS nid,
+        DATE(dox.fecha_aprobado) AS fecha_aprobado,
+        DATE(dox.fecha_cierre)   AS fecha_cierre,
+        dox.estado_aprobado,
+        dox.equipo_sellers
+      FROM `papyrus-data.habi_wh.detalle_ofertas_mx` AS dox
+      LEFT JOIN `sellers-main-prod.hubspot_staging.deal` AS hd
+        ON CAST(hd.nid AS INT64) = CAST(dox.nid AS INT64)
+      LEFT JOIN inmo_first inf ON inf.nid = CAST(dox.nid AS INT64)
+      WHERE hd.asignacion_descartes_top IS NULL
+        AND inf.nid IS NULL
       QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY nid, DATE(fecha_aprobado) ORDER BY fecha_aprobado DESC
+        PARTITION BY dox.nid, DATE(dox.fecha_aprobado) ORDER BY dox.fecha_aprobado DESC
       ) = 1
     ),
     base_hubspot AS (
@@ -372,8 +399,6 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       LEFT JOIN `sellers-main-prod.hubspot.owners` o
         ON LOWER(o.email) = LOWER(d.hubspot_owner_id)
         OR CAST(o.id AS STRING) = CAST(d.hubspot_owner_id AS STRING)
-      WHERE d.abc_test_landing_co IS NOT NULL
-        AND d.country = 'México'
     ),
     pasaron_ofertados AS (
       SELECT
@@ -381,6 +406,18 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         MIN(fecha) AS fecha_ofertado
       FROM `sellers-main-prod.hubspot.historical`
       WHERE propiedad = 'dealstage' AND valor = '1066441580'
+      GROUP BY 1
+    ),
+    fecha_ofertas AS (
+      SELECT
+        CAST(h.nid AS INT64) AS nid,
+        MIN(h.fecha) AS fecha_ofertado
+      FROM `sellers-main-prod.hubspot.historical` h
+      WHERE h.propiedad = 'dealstage' AND h.valor = '1066441580'
+        AND EXISTS (
+          SELECT 1 FROM `papyrus-data-mx.habi_wh_bi.tabla_inmuebles_general` ig
+          WHERE ig.nid = CAST(h.nid AS INT64)
+        )
       GROUP BY 1
     ),
     base_cierres_mx AS (
@@ -404,9 +441,9 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       o.fecha_aprobado,
       DATE_TRUNC(o.fecha_aprobado, WEEK(MONDAY)) AS fecha_aprobado_semana,
       o.fecha_cierre,
-      c.v_fecha_promesa,
-      IFNULL(o.fecha_cierre, c.v_fecha_promesa) AS fecha_cierre_efectiva,
-      DATE(po.fecha_ofertado) AS fecha_ofertado,
+      IF(o.fecha_cierre IS NOT NULL, c.v_fecha_promesa, NULL) AS v_fecha_promesa,
+      o.fecha_cierre AS fecha_cierre_efectiva,
+      DATE(fo.fecha_ofertado) AS fecha_ofertado,
       IF(po.nid IS NOT NULL, 'Ofertado', 'No ofertado') AS fue_ofertado,
       CASE
         WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) IS NULL THEN NULL
@@ -418,6 +455,7 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
     FROM base_ofertas o
     LEFT JOIN base_hubspot hs ON hs.nid = o.nid
     LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
+    LEFT JOIN fecha_ofertas fo ON fo.nid = o.nid
     LEFT JOIN base_cierres_mx c ON c.nid = o.nid
     """
     df = _client().query(sql).to_dataframe()
@@ -538,6 +576,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
         LOWER(NULLIF(TRIM(d.deal_uuid), '')) AS deal_uuid,
         d.pipeline,
         d.hubspot_owner_id,
+        d.area_metropolitana,
         TRIM(CONCAT(IFNULL(o.first_name, ''), ' ', IFNULL(o.last_name, ''))) AS owner_name,
         SAFE_CAST(d.precio_comite AS FLOAT64) AS precio_comite,
         SAFE_CAST(d.ask_price_despues__de_remodelacion AS FLOAT64) AS customer_price,
@@ -561,12 +600,33 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       WHERE propiedad = 'dealstage' AND valor = '{dealstage_ofertado}'
       GROUP BY 1
     ),
-    base_cierres_col AS (
+    base_cierres_raw AS (
       SELECT
         CAST(nid AS INT64) AS nid,
-        MIN(DATE(v_fecha_promesa)) AS v_fecha_promesa
+        DATE(v_fecha_promesa) AS v_fecha_promesa
       FROM `papyrus-master.operations_sellers_co_dwh.int_sellers_cierres_desistidos_co_dwh`
       WHERE v_fecha_promesa IS NOT NULL
+    ),
+    -- Cierre estilo query maestra COL: la promesa debe ser >= fecha_aprobado y se
+    -- toma la última (MAX) ligada a ese aprobado. (Antes se usaba MIN sin la
+    -- restricción, lo que inflaba el cierre ~+9 deals vs Looker.)
+    base_cierres_col AS (
+      SELECT o.nid, o.fecha_aprobado, c.v_fecha_promesa
+      FROM base_ofertas o
+      LEFT JOIN base_cierres_raw c ON c.nid = o.nid
+      WHERE o.fecha_aprobado <= c.v_fecha_promesa
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY o.nid, o.fecha_aprobado ORDER BY c.v_fecha_promesa DESC
+      ) = 1
+    ),
+    -- Dealstage "inmueble aprobado" (1172812203). El reporte de Looker filtra el
+    -- universo a deals que pasaron por esta etapa ("Fecha inmueble aprobado").
+    fecha_inmueble_aprobado AS (
+      SELECT
+        CAST(nid AS INT64) AS nid,
+        MIN(DATE(fecha)) AS fecha_inmueble_aprobado
+      FROM `sellers-main-prod.hubspot.historical`
+      WHERE propiedad = 'dealstage' AND valor = '1172812203'
       GROUP BY 1
     )
     SELECT
@@ -579,6 +639,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       hs.deal_uuid,
       hs.pipeline,
       hs.hubspot_owner_id,
+      hs.area_metropolitana,
       hs.owner_name,
       hs.negocio_aplica_para_bnpl,
       o.equipo_sellers,
@@ -589,6 +650,7 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
       c.v_fecha_promesa,
       IFNULL(o.fecha_cierre, c.v_fecha_promesa) AS fecha_cierre_efectiva,
       DATE(po.fecha_ofertado) AS fecha_ofertado,
+      fia.fecha_inmueble_aprobado,
       IF(po.nid IS NOT NULL, 'Ofertado', 'No ofertado') AS fue_ofertado,
       CASE
         WHEN SAFE_DIVIDE(hs.oferta_final_calculada - hs.customer_price, hs.customer_price) IS NULL THEN NULL
@@ -600,11 +662,13 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
     FROM base_ofertas o
     LEFT JOIN base_hubspot hs ON hs.nid = o.nid
     LEFT JOIN pasaron_ofertados po ON po.nid = o.nid
-    LEFT JOIN base_cierres_col c ON c.nid = o.nid
+    LEFT JOIN base_cierres_col c ON c.nid = o.nid AND c.fecha_aprobado = o.fecha_aprobado
+    LEFT JOIN fecha_inmueble_aprobado fia ON fia.nid = o.nid
     """
     df = _client().query(sql).to_dataframe()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
-                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
+                "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado",
+                "fecha_inmueble_aprobado"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
     return df

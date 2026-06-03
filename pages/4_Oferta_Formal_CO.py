@@ -50,13 +50,16 @@ st.markdown(
 
 DAY = 86400
 
-VARIANTS = ["A", "B", "C", "(sin variante)"]
+VARIANTS = ["A", "B", "C", "D", "(sin variante)"]
 NULL_VARIANT_LABEL = "(sin variante)"
 COLOR_APROBADOS = PRIMARY
 COLOR_APROBADOS_RTA = ACCENT
 COLOR_CIERRE = LIGHT
 COLOR_CVR = "#84cc16"           # verde-amarillo
 COLOR_CVR_RTA = "#06b6d4"       # cyan
+# Paleta por-variante (pie + barras de eventos): 1 color por categoría, en el
+# orden de VARIANTS (A, B, C, D, (sin variante)).
+VARIANT_COLORS = [PRIMARY, ACCENT, LIGHT, MED, PALE]
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal COL…", persist="disk")
@@ -201,7 +204,7 @@ with st.sidebar:
     st.markdown(f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>Filtros</div>", unsafe_allow_html=True)
 
     st.markdown("### Rango de fechas")
-    default_start = date(2026, 2, 16)
+    default_start = date(2026, 2, 18)
     default_end = date.today()
     sel_range = st.date_input(
         "rango",
@@ -252,6 +255,14 @@ with st.sidebar:
         label_visibility="collapsed",
         help="HubSpot · negocio_aplica_para_bnpl (Sí / No).",
     )
+
+    st.markdown("### Inmueble aprobado")
+    solo_inmueble_aprobado = st.checkbox(
+        "Solo deals con inmueble aprobado", value=True,
+        help="Filtra a deals que pasaron por el dealstage 'inmueble aprobado'. "
+             "ON por defecto para cuadrar con el reporte de Looker (filtro "
+             "'Fecha inmueble aprobado'). Desactiva para ver el universo completo.",
+    )
     st.markdown("---")
 
 
@@ -268,6 +279,10 @@ if sel_equipos and len(sel_equipos) < len(equipos_all):
     df = df[df["equipo_sellers"].astype(str).isin(sel_equipos)].copy()
 if sel_bnpl and len(sel_bnpl) < len(BNPL_OPTS):
     df = df[df["negocio_aplica_para_bnpl"].isin(sel_bnpl)].copy()
+# Filtro "inmueble aprobado" (Looker: 'Fecha inmueble aprobado' = 1). Restringe a
+# deals que pasaron por ese dealstage; cuadra el bucket "(sin variante)" con Looker.
+if solo_inmueble_aprobado and "fecha_inmueble_aprobado" in df.columns:
+    df = df[df["fecha_inmueble_aprobado"].notna()].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
@@ -508,7 +523,7 @@ with col_pie:
     else:
         fig_pie = go.Figure(go.Pie(
             labels=v_counts["Variante"], values=v_counts["N"],
-            hole=0.42, marker_colors=[PRIMARY, ACCENT, LIGHT][:len(v_counts)],
+            hole=0.42, marker_colors=VARIANT_COLORS[:len(v_counts)],
             textinfo="label+percent+value", textfont_size=12,
         ))
         fig_pie.update_layout(
@@ -541,7 +556,7 @@ with col_pie_int:
     else:
         fig_ev = go.Figure(go.Bar(
             x=g_ev["Variante"], y=g_ev["Eventos"],
-            marker_color=[PRIMARY, ACCENT, LIGHT][:len(g_ev)],
+            marker_color=VARIANT_COLORS[:len(g_ev)],
             text=g_ev["Eventos"], textposition="outside",
         ))
         fig_ev.update_layout(
@@ -569,8 +584,8 @@ st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 df_envios = load_envios_wa()
 
 # Para el cruce de la sección "Comportamiento en la landing" (más abajo)
-# sí se mantiene el universo A/B/C porque ahí queremos comparar variantes.
-df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C"])]
+# sí se mantiene el universo de variantes (A/B/C/D) porque ahí comparamos variantes.
+df_section3_abc = df_section3[df_section3["abc_test_landing_co"].isin(["A","B","C","D"])]
 universe_uuids_abc = set(df_section3_abc["deal_uuid"].dropna().astype(str).str.lower())
 
 # Enviados: respeta solo el rango de fechas sobre created_at
