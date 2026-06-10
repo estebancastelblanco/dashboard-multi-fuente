@@ -60,11 +60,9 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_oferta_formal_data_v6() -> pd.DataFrame:
-    """v6: igual que v5 (columnas de segmentación). El análisis ahora agrupa
-    por zona metropolitana derivada en la página; el bump de versión solo
-    asegura que Streamlit Cloud no sirva un df cacheado previo sin las
-    columnas razon_venta/ciudad_mx/final_prestamo_mx."""
+def load_oferta_formal_data_v7() -> pd.DataFrame:
+    """v7: añade análisis por variante (ABC) y periodicidad + dedup de insights.
+    Bump de versión para refrescar el cache en disco de Streamlit Cloud."""
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -74,9 +72,10 @@ def load_oferta_formal_data_v6() -> pd.DataFrame:
 
 
 # Alias para retro-compat con resto del código
-load_abc_data = load_oferta_formal_data_v6
-load_oferta_formal_data_v5 = load_oferta_formal_data_v6  # alias legacy
-load_oferta_formal_data_v4 = load_oferta_formal_data_v6  # alias legacy
+load_abc_data = load_oferta_formal_data_v7
+load_oferta_formal_data_v6 = load_oferta_formal_data_v7  # alias legacy
+load_oferta_formal_data_v5 = load_oferta_formal_data_v7  # alias legacy
+load_oferta_formal_data_v4 = load_oferta_formal_data_v7  # alias legacy
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
@@ -1420,6 +1419,90 @@ else:
                      "CVR por zona metropolitana × rango de monto",
                      "heat_zona_precio")
 
+    # ── Análisis por variante de landing (histórico ABC test) ──
+    # A = control sin landing (gestión 100% comercial); B = landing simple;
+    # C = landing compleja (configurador tipo Tesla). En MX el experimento dejó
+    # 95% B / 5% C tras ganar B; en CO ganó C (100%). Antes corrió el triple
+    # A/B/C y hubo un periodo apagado.
+    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+    st.markdown("<h3>CVR por variante de landing (ABC test)</h3>", unsafe_allow_html=True)
+    LAND_LABEL = {
+        "A": "A · control (sin landing)",
+        "B": "B · landing simple",
+        "C": "C · landing compleja (Tesla)",
+        NULL_VARIANT_LABEL: "(sin variante)",
+    }
+    if "abc_test_landing_co" in _ins_base.columns:
+        vr = (_ins_base.groupby("abc_test_landing_co")
+              .agg(Aprobados=("nid", "size"), Cierres=("cerro", "sum")))
+        vr["CVR %"] = (vr["Cierres"] / vr["Aprobados"] * 100).round(1)
+        vr = vr.reset_index()
+        vr["Variante"] = vr["abc_test_landing_co"].map(
+            lambda x: LAND_LABEL.get(str(x), str(x)))
+        vr = vr[["Variante", "Aprobados", "Cierres", "CVR %"]].sort_values(
+            "Aprobados", ascending=False)
+        cvar1, cvar2 = st.columns([3, 2])
+        with cvar1:
+            st.dataframe(vr, hide_index=True, use_container_width=True)
+        with cvar2:
+            fig_v = go.Figure(go.Bar(
+                x=vr["Variante"], y=vr["CVR %"], marker_color=PRIMARY,
+                text=[f"{v:.1f}%" for v in vr["CVR %"]], textposition="outside",
+            ))
+            fig_v.update_layout(
+                paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+                font=dict(family="Inter, sans-serif", color=DEEP, size=10),
+                height=240, margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(title="CVR %", gridcolor="#ede8f5"),
+                xaxis=dict(tickangle=-15),
+            )
+            st.plotly_chart(fig_v, use_container_width=True, key="bar_variante_cvr")
+        st.caption(
+            "A = control sin landing · B = landing simple · C = landing compleja "
+            "(configurador tipo Tesla). MX dejó 95% B / 5% C tras ganar B; CO usa "
+            "100% C. Los aprobados '(sin variante)' son deals previos al test o sin "
+            "asignación."
+        )
+
+    # ── Periodicidad: CVR por mes de aprobación × variante ──
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown("<h3>Periodicidad — CVR mensual por variante</h3>", unsafe_allow_html=True)
+    _per = _ins_base.copy()
+    _per["mes"] = pd.to_datetime(_per["fecha_aprobado"], errors="coerce").dt.to_period("M").astype(str)
+    _per = _per[_per["mes"] != "NaT"]
+    if not _per.empty and "abc_test_landing_co" in _per.columns:
+        fig_per = go.Figure()
+        _palette = {"A": MED, "B": PRIMARY, "C": ACCENT, NULL_VARIANT_LABEL: "#cbd5e1"}
+        for v in ["A", "B", "C", NULL_VARIANT_LABEL]:
+            sub = _per[_per["abc_test_landing_co"] == v]
+            if sub.empty:
+                continue
+            gm = sub.groupby("mes").agg(n=("nid", "size"), cvr=("cerro", "mean")).reset_index()
+            gm = gm[gm["n"] >= 8]  # ocultar meses con muestra muy chica
+            if gm.empty:
+                continue
+            fig_per.add_trace(go.Scatter(
+                x=gm["mes"], y=(gm["cvr"] * 100).round(1),
+                mode="lines+markers", name=LAND_LABEL.get(v, v),
+                line=dict(color=_palette.get(v, MED), width=3),
+                marker=dict(size=9),
+                hovertemplate="%{x}<br>CVR: %{y:.1f}%<extra>" + LAND_LABEL.get(v, v) + "</extra>",
+            ))
+        fig_per.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=320, margin=dict(l=10, r=10, t=20, b=10),
+            yaxis=dict(title="CVR %", gridcolor="#ede8f5", ticksuffix="%"),
+            xaxis=dict(title="Mes de aprobación", gridcolor="#ede8f5", type="category"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+        )
+        st.plotly_chart(fig_per, use_container_width=True, key="line_periodicidad")
+        st.caption(
+            "CVR aprobado→cierre por mes y variante (meses con <8 aprobados ocultos). "
+            "Útil para ver cuándo el triple ABC estuvo activo, el periodo apagado y la "
+            "estabilidad de la señal de cada variante en el tiempo."
+        )
+
     # ── Escaneo de segmentos: 1, 2 y 3 dimensiones (zona, no municipio) ──
     GROUPINGS = [
         (["razon_venta"], "Razón"),
@@ -1519,6 +1602,43 @@ else:
         bad = {RAZON_NA, CIUDAD_NA, ZONA_NA, "(sin monto)"}
         return not any(str(v) in bad or str(v).startswith("(otra ·") for v in vals)
 
+    def _dedup_overlapping(df_cand: pd.DataFrame) -> pd.DataFrame:
+        """Colapsa insights solapados que cuentan la misma historia.
+
+        Un segmento B "explica lo mismo" que A cuando sus valores son un
+        superconjunto de los de A, la dirección del lift coincide y el lift es
+        similar (el detalle extra no agrega señal nueva). En ese caso preferimos
+        el más GENERAL (menos dimensiones) como representante: p. ej.
+        «0k–600k» representa a «VdM·0k–600k» y a «Liquidez·VdM·0k–600k» si los
+        tres apuntan +~21pp. Así evitamos 3 tarjetas que dicen lo mismo.
+
+        Estrategia: recorrer de más general (menos dims) a más específico;
+        descartar un candidato específico si ya existe uno más general aceptado
+        cuyo set de valores está contenido en él, misma dirección y |Δlift| ≤ 6pp.
+        """
+        if df_cand.empty:
+            return df_cand
+        rows = df_cand.to_dict("records")
+        # Orden: primero los más generales (menos dims), luego por |lift| desc
+        rows.sort(key=lambda r: (len(r["dims"]), -r["_absp"]))
+        kept: list[dict] = []
+        for r in rows:
+            r_vals = set(str(v) for v in r["vals"])
+            r_dir = r["vs baseline (pp)"] > 0
+            redundante = False
+            for k in kept:
+                k_vals = set(str(v) for v in k["vals"])
+                same_dir = (k["vs baseline (pp)"] > 0) == r_dir
+                # r es más específico si contiene todos los valores del aceptado
+                contiene = k_vals.issubset(r_vals) and len(k_vals) < len(r_vals)
+                lift_similar = abs(r["vs baseline (pp)"] - k["vs baseline (pp)"]) <= 6
+                if contiene and same_dir and lift_similar:
+                    redundante = True
+                    break
+            if not redundante:
+                kept.append(r)
+        return pd.DataFrame(kept)
+
     insight_rows = []
     if not seg_df.empty:
         # Solo señales accionables (sin segmentos con dato faltante).
@@ -1530,9 +1650,12 @@ else:
             mask_act = cand["vals"].apply(_is_actionable).astype(bool)
             cand = cand[mask_act]
         if not cand.empty:
+            # Colapsar solapados ANTES de elegir top: deja un representante por
+            # historia (el más general), no 3 que dicen lo mismo.
+            cand = _dedup_overlapping(cand)
             cand = cand.sort_values(["_absp", "Aprobados"], ascending=[False, False])
-            pos = cand[cand["vs baseline (pp)"] > 0].head(3)
-            neg = cand[cand["vs baseline (pp)"] < 0].head(2)
+            pos = cand[cand["vs baseline (pp)"] > 0].head(4)
+            neg = cand[cand["vs baseline (pp)"] < 0].head(3)
             insight_rows = list(pos.to_dict("records")) + list(neg.to_dict("records"))
 
     if not insight_rows:
@@ -1586,13 +1709,39 @@ else:
             # ~300 por brazo; lo bajamos a un objetivo operativo de cierres por brazo.
             n_objetivo = 30 if abs(lift) >= 15 else 50
 
+            # Variante de landing dominante DENTRO del segmento (contexto ABC test).
+            # Permite proponer experimentos concretos: B=landing simple ganó en MX,
+            # C=landing compleja (Tesla) ganó en CO. A=control sin landing.
+            var_ctx = ""
+            try:
+                _seg_mask = pd.Series(True, index=_ins_base.index)
+                for d, v in partes.items():
+                    _seg_mask &= (_ins_base[d].astype(str) == str(v))
+                _seg_sub = _ins_base[_seg_mask]
+                if "abc_test_landing_co" in _seg_sub.columns and len(_seg_sub) >= 10:
+                    _vc = (_seg_sub.groupby("abc_test_landing_co")["cerro"]
+                           .agg(["size", "mean"]))
+                    _vc = _vc[_vc["size"] >= 8]
+                    if not _vc.empty:
+                        _best = _vc["mean"].idxmax()
+                        _bestcvr = _vc["mean"].max() * 100
+                        LAND = {"A": "A (control sin landing)", "B": "B (landing simple)",
+                                "C": "C (landing compleja tipo Tesla)"}
+                        var_ctx = (
+                            f" En este segmento, la variante que más cierra es "
+                            f"<b>{LAND.get(str(_best), str(_best))}</b> ({_bestcvr:.0f}% "
+                            "CVR)."
+                        )
+            except Exception:
+                var_ctx = ""
+
             # ── Framework PM ──
             # 1) Insight (evidencia observada)
             insight = (
                 f"El segmento de {seg_txt} cierra a <b>{cvr:.1f}%</b> "
                 f"({signo} que el baseline de {cvr_base*100:.1f}%, "
                 f"<b>{lift:+.1f} pp</b>; n={n} aprobados, {cierres} cierres, "
-                f"p={p:.3f})."
+                f"p={p:.3f}).{var_ctx}"
             )
 
             # 2) Supuesto riesgoso (lo que asumimos y que el experimento valida)
@@ -1641,12 +1790,14 @@ else:
             if mejor:
                 metodo = (
                     f"<b>A/B test zonificado en producción</b> sobre {zona_txt}, "
-                    "filtrando al perfil del segmento. Tratamiento = landing "
-                    f"personalizada (copy «{razon_txt}»"
+                    "filtrando al perfil del segmento. Sobre la variante ganadora "
+                    "vigente (en MX hoy es <b>B, landing simple</b>; 95/5 vs C), "
+                    f"crear un tratamiento <b>personalizado</b>: copy según «{razon_txt}»"
                     + (f", comparables y oferta calibrados a {precio}" if precio else "")
-                    + "); Control = landing estándar. Asignación 50/50 entre nuevos "
-                    "aprobados del segmento. Mitigación de riesgo: solo se cambia el "
-                    "contenido de la landing (reversible), no la oferta ni el motor."
+                    + ", prueba social local de la zona. Control = landing estándar "
+                    "actual. Asignación 50/50 entre nuevos aprobados del segmento. "
+                    "Mitigación: solo cambia contenido de la landing (reversible), no "
+                    "la oferta ni el motor."
                 )
                 umbral = (
                     f"<b>Éxito:</b> CVR tratamiento ≥ CVR control + 5 pp con p<0.05. "
@@ -1657,10 +1808,12 @@ else:
                 metodo = (
                     f"<b>Paso 1 — Discovery:</b> 5–8 entrevistas a aprobados que NO "
                     f"cerraron en {zona_txt} para ubicar la fricción (precio, "
-                    "confianza, trámite). <b>Paso 2 — A/B test</b> de la landing "
-                    f"rediseñada contra la actual sobre el perfil del segmento. "
-                    "Mitigación: discovery barato antes de invertir en build; el "
-                    "A/B solo toca contenido de landing."
+                    "confianza, trámite). <b>Paso 2 — A/B test</b> de landing "
+                    f"rediseñada contra la actual sobre el perfil del segmento. Como "
+                    "<b>C (landing compleja tipo Tesla)</b> ganó en CO, vale probar "
+                    "subir su peso aquí (hoy 5% en MX) contra la B simple en este "
+                    "segmento concreto. Mitigación: discovery barato antes de invertir "
+                    "en build; el A/B solo toca contenido de landing."
                 )
                 umbral = (
                     f"<b>Éxito:</b> CVR del tratamiento sube ≥5 pp sobre el "
