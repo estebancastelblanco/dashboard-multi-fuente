@@ -391,6 +391,15 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
         d.pipeline,
         d.hubspot_owner_id,
         TRIM(CONCAT(IFNULL(o.first_name,''), ' ', IFNULL(o.last_name,''))) AS owner_name,
+        -- Segmentación del experimento (filtros de análisis e insights):
+        --   razon_de_venta_usuario_gabi_mx → motivo declarado de venta (Liquidez,
+        --     Cambio de Casa, Otros). ~44% de cobertura.
+        --   ciudad_mx → municipio MX (100% cobertura; `ciudad`/`area_metropolitana`
+        --     vienen vacías para MX, son columnas CO).
+        --   final_prestamo_mx → monto final del préstamo MXN (94% cobertura).
+        NULLIF(TRIM(d.razon_de_venta_usuario_gabi_mx), '') AS razon_venta,
+        NULLIF(TRIM(d.ciudad_mx), '') AS ciudad_mx,
+        SAFE_CAST(d.final_prestamo_mx AS FLOAT64) AS final_prestamo_mx,
         SAFE_CAST(d.valor_negociado AS FLOAT64) AS valor_negociado,
         SAFE_CAST(d.ask_price AS FLOAT64)       AS customer_price,
         SAFE_CAST(d.precio_ancla AS FLOAT64)    AS precio_ancla_hs,
@@ -436,6 +445,9 @@ def fetch_abc_test_landing_co() -> pd.DataFrame:
       hs.pipeline,
       hs.hubspot_owner_id,
       hs.owner_name,
+      hs.razon_venta,
+      hs.ciudad_mx,
+      hs.final_prestamo_mx,
       o.equipo_sellers,
       o.estado_aprobado,
       o.fecha_aprobado,

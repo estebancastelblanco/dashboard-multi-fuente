@@ -1,6 +1,7 @@
 """Oferta formal MX — A/B/C sobre conversión aprobado → cierre."""
 from __future__ import annotations
 
+import math
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -179,6 +180,66 @@ df.loc[df["abc_test_landing_co"].astype(str).str.strip() == "", "abc_test_landin
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Normalización de las 3 columnas de segmentación (razón de venta, ciudad MX,
+# monto del préstamo). Son la materia prima de los filtros nuevos y de la
+# sección "Análisis e Insights".
+# ─────────────────────────────────────────────────────────────────────────────
+RAZON_NA = "(sin razón)"
+CIUDAD_NA = "(sin ciudad)"
+
+if "razon_venta" not in df.columns:
+    df["razon_venta"] = pd.NA
+if "ciudad_mx" not in df.columns:
+    df["ciudad_mx"] = pd.NA
+if "final_prestamo_mx" not in df.columns:
+    df["final_prestamo_mx"] = pd.NA
+
+df["razon_venta"] = (
+    df["razon_venta"].astype(str).str.strip()
+    .replace({"": RAZON_NA, "nan": RAZON_NA, "None": RAZON_NA, "<NA>": RAZON_NA})
+)
+df["ciudad_mx"] = (
+    df["ciudad_mx"].astype(str).str.strip()
+    .replace({"": CIUDAD_NA, "nan": CIUDAD_NA, "None": CIUDAD_NA, "<NA>": CIUDAD_NA})
+)
+df["final_prestamo_mx"] = pd.to_numeric(df["final_prestamo_mx"], errors="coerce")
+
+
+def _price_buckets(series: pd.Series, n: int = 5) -> tuple[list[float], list[str]]:
+    """Devuelve (edges, labels) para discretizar el monto del préstamo.
+
+    Usa cortes redondeados a 100k que cubren el rango observado de
+    `final_prestamo_mx`. Si el rango es degenerado, cae a un único bucket.
+    """
+    vals = pd.to_numeric(series, errors="coerce").dropna()
+    vals = vals[vals > 0]
+    if vals.empty:
+        return [0, 1], ["(sin monto)"]
+    lo, hi = float(vals.min()), float(vals.max())
+    if hi <= lo:
+        return [0, hi + 1], [f"≤ {hi/1e6:.1f}M"]
+    # cortes "bonitos": 0, 600k, 900k, 1.3M, 2M, +∞ por defecto, pero si el
+    # rango es chico, usar quintiles redondeados a 100k.
+    fixed = [0, 600_000, 900_000, 1_300_000, 2_000_000, float("inf")]
+    if hi <= 2_000_000:
+        qs = [vals.quantile(q) for q in (0.2, 0.4, 0.6, 0.8)]
+        edges = [0] + [round(q / 100_000) * 100_000 for q in qs] + [float("inf")]
+        edges = sorted(set(edges))
+    else:
+        edges = fixed
+
+    def _fmt(x: float) -> str:
+        if x == float("inf"):
+            return "∞"
+        if x >= 1e6:
+            return f"{x/1e6:.1f}M".replace(".0M", "M")
+        return f"{int(x/1000)}k"
+
+    labels = [f"{_fmt(edges[i])}–{_fmt(edges[i+1])}" for i in range(len(edges) - 1)]
+    return edges, labels
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sidebar — filtros
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -249,6 +310,64 @@ with st.sidebar:
              "Agrega '(otro)' para incluir deals A/B/C con un pipeline distinto "
              "a los 2 operativos.",
     )
+
+    # ── Filtros de segmentación (razón de venta · ciudad · monto préstamo) ──
+    # Solo restringen cuando el usuario los mueve del default. El default deja
+    # TODO el universo intacto para no romper el cuadre con Looker.
+    st.markdown("### Razón de venta")
+    razon_opts = sorted(
+        df["razon_venta"].dropna().astype(str).unique().tolist()
+    )
+    sel_razones = st.multiselect(
+        "razon_venta", razon_opts, default=razon_opts,
+        label_visibility="collapsed",
+        help="razon_de_venta_usuario_gabi_mx (Liquidez, Cambio de Casa, Otros). "
+             "~44% de los deals la tienen; el resto cae en '(sin razón)'.",
+    )
+
+    st.markdown("### Ciudad (MX)")
+    ciudad_counts = df["ciudad_mx"].value_counts()
+    ciudad_opts = ciudad_counts.index.tolist()  # ordenadas por frecuencia
+    sel_ciudades = st.multiselect(
+        "ciudad_mx", ciudad_opts, default=ciudad_opts,
+        label_visibility="collapsed",
+        help="ciudad_mx (municipio). 100% de cobertura en MX. Ordenadas por "
+             "número de deals.",
+    )
+
+    st.markdown("### Monto del préstamo (final_prestamo_mx)")
+    _fp = pd.to_numeric(df["final_prestamo_mx"], errors="coerce")
+    _fp_pos = _fp[_fp > 0]
+    if not _fp_pos.empty:
+        fp_min = int(_fp_pos.min())
+        # Tope robusto a outliers: hay un puñado de deals con montos basura
+        # (valores de prueba > 10M, p.ej. 933M) que comprimirían el slider.
+        # Descartamos lo que esté por encima de p99×2 y redondeamos a 100k.
+        _p99 = float(_fp_pos.quantile(0.99))
+        _cutoff = _p99 * 2 if _p99 > 0 else float(_fp_pos.max())
+        _robust_max = float(_fp_pos[_fp_pos <= _cutoff].max())
+        fp_max = int(math.ceil(_robust_max / 100_000) * 100_000)
+    else:
+        fp_min, fp_max = 0, 1
+    sel_precio = st.slider(
+        "final_prestamo_mx",
+        min_value=0,
+        max_value=fp_max,
+        value=(0, fp_max),
+        step=max((fp_max) // 100, 1),
+        format="$%d",
+        label_visibility="collapsed",
+        help="Rango de monto final del préstamo (MXN). Mueve los extremos para "
+             "acotar. Por defecto cubre todo el rango (0 → máximo observado, "
+             "robusto a outliers). Los deals con monto > tope se incluyen solo "
+             "cuando el slider está en su máximo.",
+    )
+    incluir_sin_monto = st.checkbox(
+        "Incluir deals sin monto",
+        value=True,
+        help="94% de los deals tienen final_prestamo_mx. Desmárcalo para "
+             "excluir los que no lo tienen cuando acotas el rango.",
+    )
     st.markdown("---")
 
 
@@ -271,6 +390,22 @@ if sel_equipos and len(sel_equipos) < len(equipos_all):
 _pipeline_null = df["pipeline"].isna() | (df["pipeline"].astype(str).str.lower().isin(["", "nan", "none"]))
 _sin_variante = df["abc_test_landing_co"] == NULL_VARIANT_LABEL
 df = df[_sin_variante | _pipeline_null | df["pipeline_label"].isin(sel_pipelines)].copy()
+
+# ── Filtros de segmentación: solo restringen si el usuario los movió del
+# default (todo seleccionado / rango completo). Así el universo entero queda
+# intacto por defecto y el cuadre con Looker no se rompe.
+if sel_razones and len(sel_razones) < len(razon_opts):
+    df = df[df["razon_venta"].astype(str).isin(sel_razones)].copy()
+if sel_ciudades and len(sel_ciudades) < len(ciudad_opts):
+    df = df[df["ciudad_mx"].astype(str).isin(sel_ciudades)].copy()
+_lo_precio, _hi_precio = sel_precio
+if (_lo_precio, _hi_precio) != (0, fp_max):
+    _fp_col = pd.to_numeric(df["final_prestamo_mx"], errors="coerce")
+    _in_precio = _fp_col.between(_lo_precio, _hi_precio)
+    if incluir_sin_monto:
+        df = df[_in_precio | _fp_col.isna()].copy()
+    else:
+        df = df[_in_precio].copy()
 
 
 def _metric_block(_df: pd.DataFrame) -> dict:
@@ -1044,6 +1179,372 @@ else:
             f"{int(matriz['Negocios con landing'].sum())} negocios totales · "
             f"{int(matriz['Abrieron landing'].sum())} abrieron · "
             f"{int(matriz['Interacciones'].sum())} interacciones (page views)."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sección 6 · Análisis e Insights — segmentación por razón × ciudad × monto
+#
+# Objetivo: encontrar qué combinaciones de (razón de venta, ciudad MX, rango de
+# monto del préstamo) convierten mejor o peor a cierre, con respaldo estadístico
+# (z-test de proporciones vs el resto del universo), y proponer una hipótesis +
+# un experimento accionable por cada señal fuerte. La idea es zonificar e iterar
+# la landing por segmento.
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<div style='height:32px'></div>", unsafe_allow_html=True)
+st.markdown("<h2>Análisis e Insights · segmentación</h2>", unsafe_allow_html=True)
+st.markdown(
+    f"<div style='color:{MED};font-size:0.82rem;margin-bottom:6px'>"
+    "Cruce de <b>razón de venta</b> × <b>ciudad</b> × <b>rango de monto del "
+    "préstamo</b> sobre la conversión aprobado→cierre (CVR). Solo se reportan "
+    "los segmentos con señal estadística vs. el resto del universo. "
+    "Respeta los filtros del sidebar.</div>",
+    unsafe_allow_html=True,
+)
+
+# Universo de análisis: deals aprobados en el rango (ya filtrados por sidebar,
+# incluyendo los 3 filtros nuevos). Deduplicado por nid; CVR = cierre/aprobado.
+_ins_base = df_apro.drop_duplicates("nid").copy()
+
+if _ins_base.empty or len(_ins_base) < 20:
+    st.info(
+        "Universo insuficiente para el análisis de segmentos "
+        f"({len(_ins_base)} deals aprobados). Amplía el rango de fechas o "
+        "relaja los filtros."
+    )
+else:
+    _ins_base["cerro"] = _ins_base["fecha_cierre_efectiva"].notna()
+    _ins_base["razon_venta"] = _ins_base["razon_venta"].fillna(RAZON_NA).astype(str)
+    _ins_base["ciudad_mx"] = _ins_base["ciudad_mx"].fillna(CIUDAD_NA).astype(str)
+
+    # Buckets de monto sobre el universo activo
+    _edges, _labels = _price_buckets(_ins_base["final_prestamo_mx"])
+    _fp_num = pd.to_numeric(_ins_base["final_prestamo_mx"], errors="coerce")
+    _ins_base["price_bucket"] = pd.cut(
+        _fp_num, bins=_edges, labels=_labels, include_lowest=True
+    ).astype("object")
+    _ins_base["price_bucket"] = _ins_base["price_bucket"].fillna("(sin monto)")
+
+    n_total = len(_ins_base)
+    cierre_total = int(_ins_base["cerro"].sum())
+    cvr_base = cierre_total / n_total if n_total else 0.0
+
+    # KPIs baseline
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.markdown(kpi_card("Aprobados (universo)", f"{n_total:,}"), unsafe_allow_html=True)
+    with k2:
+        st.markdown(kpi_card("Cierres", f"{cierre_total:,}"), unsafe_allow_html=True)
+    with k3:
+        st.markdown(kpi_card("CVR baseline", f"{cvr_base*100:.1f}%"), unsafe_allow_html=True)
+    with k4:
+        st.markdown(kpi_card("Ciudades activas",
+                             f"{_ins_base['ciudad_mx'].nunique():,}"),
+                    unsafe_allow_html=True)
+
+    # ── z-test de dos proporciones (segmento vs. resto) sin scipy ──
+    def _two_prop_z(c1: int, n1: int, c2: int, n2: int) -> tuple[float, float]:
+        if n1 == 0 or n2 == 0:
+            return 0.0, 1.0
+        p1, p2 = c1 / n1, c2 / n2
+        p_pool = (c1 + c2) / (n1 + n2)
+        se = math.sqrt(p_pool * (1 - p_pool) * (1 / n1 + 1 / n2))
+        if se == 0:
+            return 0.0, 1.0
+        z = (p1 - p2) / se
+        p_val = math.erfc(abs(z) / math.sqrt(2))  # two-sided
+        return z, p_val
+
+    MIN_N = 25  # mínimo de aprobados en el segmento para considerarlo
+
+    # ── Heatmaps de CVR ──
+    def _heatmap_cvr(rows_col: str, row_order: list[str], title: str, key: str):
+        cols_order = [l for l in _labels if l in _ins_base["price_bucket"].unique()]
+        if "(sin monto)" in _ins_base["price_bucket"].unique():
+            cols_order = cols_order + ["(sin monto)"]
+        z_vals, text_vals = [], []
+        for r in row_order:
+            z_row, t_row = [], []
+            for c in cols_order:
+                sub = _ins_base[(_ins_base[rows_col] == r) & (_ins_base["price_bucket"] == c)]
+                n = len(sub)
+                if n < max(MIN_N // 2, 8):
+                    z_row.append(None)
+                    t_row.append(f"n={n}" if n else "")
+                else:
+                    cvr = sub["cerro"].mean() * 100
+                    z_row.append(cvr)
+                    t_row.append(f"{cvr:.0f}%<br>n={n}")
+            z_vals.append(z_row)
+            text_vals.append(t_row)
+        fig = go.Figure(go.Heatmap(
+            z=z_vals, x=cols_order, y=row_order, text=text_vals,
+            texttemplate="%{text}", textfont=dict(size=10),
+            colorscale=[[0, "#fde2e2"], [0.5, "#fff3cd"], [1, "#16a34a"]],
+            colorbar=dict(title="CVR %"), hoverongaps=False,
+            zmin=0, zmax=max(cvr_base * 200, 10),
+        ))
+        fig.update_layout(
+            paper_bgcolor=WHITE, plot_bgcolor=WHITE,
+            title=dict(text=title, font=dict(size=13, color=DEEP)),
+            font=dict(family="Inter, sans-serif", color=DEEP, size=11),
+            height=max(300, len(row_order) * 46 + 120),
+            margin=dict(l=10, r=10, t=46, b=10),
+            xaxis=dict(title="Rango de monto del préstamo (MXN)"),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig, use_container_width=True, key=key)
+        st.caption(
+            "Celdas con muestra < 8 quedan en blanco. CVR = cierre / aprobado."
+        )
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    razon_order = [r for r in ["Liquidez", "Cambio de Casa", "Otros", RAZON_NA]
+                   if r in _ins_base["razon_venta"].unique()]
+    _heatmap_cvr("razon_venta", razon_order,
+                 "CVR por razón de venta × rango de monto", "heat_razon_precio")
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    top_ciudades = (
+        _ins_base[_ins_base["ciudad_mx"] != CIUDAD_NA]["ciudad_mx"]
+        .value_counts().head(8).index.tolist()
+    )
+    if top_ciudades:
+        _heatmap_cvr("ciudad_mx", top_ciudades,
+                     "CVR por ciudad (top 8 por volumen) × rango de monto",
+                     "heat_ciudad_precio")
+
+    # ── Escaneo de segmentos: 1, 2 y 3 dimensiones ──
+    GROUPINGS = [
+        (["razon_venta"], "Razón"),
+        (["ciudad_mx"], "Ciudad"),
+        (["price_bucket"], "Monto"),
+        (["razon_venta", "price_bucket"], "Razón × Monto"),
+        (["ciudad_mx", "price_bucket"], "Ciudad × Monto"),
+        (["razon_venta", "ciudad_mx"], "Razón × Ciudad"),
+        (["razon_venta", "ciudad_mx", "price_bucket"], "Razón × Ciudad × Monto"),
+    ]
+
+    seg_rows = []
+    for dims, fam in GROUPINGS:
+        for keys, sub in _ins_base.groupby(dims, dropna=False):
+            n1 = len(sub)
+            if n1 < MIN_N:
+                continue
+            c1 = int(sub["cerro"].sum())
+            n2 = n_total - n1
+            c2 = cierre_total - c1
+            cvr_seg = c1 / n1
+            lift_pp = (cvr_seg - cvr_base) * 100
+            z, p = _two_prop_z(c1, n1, c2, n2)
+            keys_t = keys if isinstance(keys, tuple) else (keys,)
+            label = " · ".join(str(k) for k in keys_t)
+            seg_rows.append({
+                "Familia": fam,
+                "Segmento": label,
+                "dims": dims,
+                "vals": keys_t,
+                "Aprobados": n1,
+                "Cierres": c1,
+                "CVR %": round(cvr_seg * 100, 1),
+                "vs baseline (pp)": round(lift_pp, 1),
+                "p-value": round(p, 4),
+                "_absp": abs(lift_pp),
+            })
+
+    seg_df = pd.DataFrame(seg_rows)
+
+    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+    st.markdown("<h3>Segmentos con señal estadística</h3>", unsafe_allow_html=True)
+
+    if seg_df.empty:
+        st.info(
+            f"Ningún segmento alcanza el mínimo de {MIN_N} aprobados con los "
+            "filtros actuales."
+        )
+        sig = pd.DataFrame()
+    else:
+        # Señal = p < 0.10 (direccional) y lift relevante (>= 5 pp absolutos)
+        sig = seg_df[(seg_df["p-value"] < 0.10) & (seg_df["_absp"] >= 5)].copy()
+        sig = sig.sort_values(["p-value", "_absp"], ascending=[True, False])
+
+        if sig.empty:
+            st.info(
+                "Ningún segmento supera el umbral de significancia (p<0.10) y "
+                "lift (≥5pp). Muestra los segmentos con mayor desviación abajo."
+            )
+            show_tbl = seg_df.sort_values("_absp", ascending=False).head(15)
+        else:
+            show_tbl = sig.head(20)
+
+        def _color_lift(v):
+            try:
+                p = float(v)
+            except Exception:
+                return ""
+            if p >= 10:
+                return "background-color:#16a34a;color:#fff;font-weight:600"
+            if p >= 0:
+                return "background-color:#dcfce7;color:#166534;font-weight:600"
+            if p <= -10:
+                return "background-color:#dc2626;color:#fff;font-weight:600"
+            return "background-color:#fee2e2;color:#7f1d1d;font-weight:600"
+
+        disp_cols = ["Familia", "Segmento", "Aprobados", "Cierres",
+                     "CVR %", "vs baseline (pp)", "p-value"]
+        styled_seg = (
+            show_tbl[disp_cols].style
+            .map(_color_lift, subset=["vs baseline (pp)"])
+            .format({"CVR %": "{:.1f}", "vs baseline (pp)": "{:+.1f}",
+                     "p-value": "{:.4f}"})
+        )
+        st.dataframe(styled_seg, hide_index=True, use_container_width=True)
+        st.caption(
+            f"Baseline CVR = {cvr_base*100:.1f}% sobre {n_total:,} aprobados. "
+            "Señal = p<0.10 (z-test de dos proporciones, segmento vs. resto) y "
+            "|lift| ≥ 5pp. Verde = convierte mejor; rojo = peor."
+        )
+
+    # ── Insights accionables: Hipótesis + Experimento por señal fuerte ──
+    st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
+    st.markdown("<h3>Hipótesis y experimentos propuestos</h3>", unsafe_allow_html=True)
+
+    def _is_actionable(vals: tuple) -> bool:
+        bad = {RAZON_NA, CIUDAD_NA, "(sin monto)"}
+        return not any(str(v) in bad for v in vals)
+
+    insight_rows = []
+    if not seg_df.empty:
+        # Solo señales accionables (sin segmentos con dato faltante)
+        cand = seg_df[(seg_df["p-value"] < 0.10) & (seg_df["_absp"] >= 5)].copy()
+        cand = cand[cand["vals"].apply(_is_actionable)]
+        cand = cand.sort_values(["_absp", "Aprobados"], ascending=[False, False])
+        pos = cand[cand["vs baseline (pp)"] > 0].head(3)
+        neg = cand[cand["vs baseline (pp)"] < 0].head(2)
+        insight_rows = list(pos.to_dict("records")) + list(neg.to_dict("records"))
+
+    if not insight_rows:
+        st.info(
+            "Aún no hay segmentos accionables con señal suficiente. A medida que "
+            "entren más cierres por segmento, esta sección propondrá hipótesis y "
+            "experimentos automáticamente."
+        )
+    else:
+        def _experiment_card(rec: dict, idx: int):
+            seg = rec["Segmento"]
+            fam = rec["Familia"]
+            cvr = rec["CVR %"]
+            lift = rec["vs baseline (pp)"]
+            n = rec["Aprobados"]
+            cierres = rec["Cierres"]
+            p = rec["p-value"]
+            mejor = lift > 0
+            vals = rec["vals"]
+            dims = rec["dims"]
+
+            # Componentes legibles del segmento
+            partes = {d: v for d, v in zip(dims, vals)}
+            razon = partes.get("razon_venta")
+            ciudad = partes.get("ciudad_mx")
+            precio = partes.get("price_bucket")
+
+            seg_desc = []
+            if razon:
+                seg_desc.append(f"razón de venta <b>{razon}</b>")
+            if ciudad:
+                seg_desc.append(f"en <b>{ciudad}</b>")
+            if precio:
+                seg_desc.append(f"con préstamo en el rango <b>{precio}</b>")
+            # Construir frase legible: si arranca con "en …" o "con …" evitar el
+            # "El segmento de en …" agregando un sustantivo de enlace.
+            if seg_desc:
+                first = seg_desc[0]
+                if first.startswith("razón"):
+                    seg_txt = "clientes con " + " ".join(seg_desc)
+                else:
+                    seg_txt = "clientes " + " ".join(seg_desc)
+            else:
+                seg_txt = seg
+
+            signo = "↑ mejor" if mejor else "↓ peor"
+            color = "#16a34a" if mejor else "#dc2626"
+
+            # Insight
+            insight = (
+                f"El segmento de {seg_txt} cierra a <b>{cvr:.1f}%</b> "
+                f"({signo} que el baseline de {cvr_base*100:.1f}%, "
+                f"{lift:+.1f} pp; n={n} aprobados, {cierres} cierres, "
+                f"p={p:.3f})."
+            )
+
+            # Hipótesis
+            if mejor:
+                hipo = (
+                    f"Si la landing enviada a {seg_txt} resalta los "
+                    "mensajes que ya resuenan con este segmento (prueba social "
+                    "local, comparables de la zona, encuadre del beneficio según "
+                    f"la razón «{razon or 'su motivo'}»), entonces la conversión "
+                    "aprobado→cierre subirá aún más, porque el segmento ya muestra "
+                    "intención de cierre por encima de la media."
+                )
+                experimento = (
+                    f"<b>A/B zonificado</b> sobre {ciudad or 'la zona'}: variante "
+                    "tratamiento = landing personalizada para este segmento "
+                    f"(copy según razón «{razon or '—'}»"
+                    + (f", comparables y rango de oferta calibrados a {precio}" if precio else "")
+                    + "). Control = landing estándar. Métrica primaria: CVR "
+                    "aprobado→cierre. Asignación 50/50 sobre los nuevos aprobados "
+                    "del segmento; correr hasta acumular ≥30 cierres por brazo o "
+                    "4 semanas. Como este segmento ya convierte alto, el upside "
+                    "es defenderlo y escalar el copy ganador a zonas similares."
+                )
+            else:
+                hipo = (
+                    f"Si el bajo cierre de {seg_txt} se debe a una desconexión "
+                    "entre la oferta mostrada y la expectativa del cliente "
+                    "(precio percibido, urgencia, claridad del trámite), entonces "
+                    "rediseñar la landing para este segmento —ajustando el encuadre "
+                    "de precio y reduciendo fricción— recuperará parte de la brecha "
+                    f"de {abs(lift):.1f} pp frente al baseline."
+                )
+                experimento = (
+                    f"<b>Rediseño dirigido</b> para {seg_txt}: hipótesis de fricción "
+                    "→ landing con (a) encuadre de precio acorde al rango "
+                    f"{precio or 'del segmento'}, (b) refuerzo de la propuesta de "
+                    f"valor para «{razon or 'su motivo de venta'}», (c) CTA y "
+                    "trámite simplificados. A/B contra la landing actual; métrica "
+                    "primaria CVR aprobado→cierre, guardrail = tasa de respuesta. "
+                    "Si el segmento es de bajo volumen, correr primero una prueba "
+                    "cualitativa (5–8 entrevistas) antes del A/B cuantitativo."
+                )
+
+            with st.container():
+                st.markdown(
+                    f"<div style='border-left:4px solid {color};padding:10px 16px;"
+                    f"background:{WHITE};border-radius:8px;margin-bottom:14px;"
+                    f"box-shadow:0 1px 3px rgba(0,0,0,0.06)'>"
+                    f"<div style='font-weight:700;color:{DEEP};font-size:0.95rem;"
+                    f"margin-bottom:4px'>Insight {idx} · {fam}</div>"
+                    f"<div style='font-size:0.86rem;color:#333;margin-bottom:8px'>"
+                    f"{insight}</div>"
+                    f"<div style='font-size:0.82rem;color:{DEEP};font-weight:600'>"
+                    "Hipótesis</div>"
+                    f"<div style='font-size:0.84rem;color:#333;margin-bottom:8px'>"
+                    f"{hipo}</div>"
+                    f"<div style='font-size:0.82rem;color:{DEEP};font-weight:600'>"
+                    "Experimento propuesto</div>"
+                    f"<div style='font-size:0.84rem;color:#333'>{experimento}</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+        for i, rec in enumerate(insight_rows, start=1):
+            _experiment_card(rec, i)
+
+        st.caption(
+            "Hipótesis y experimentos generados automáticamente a partir de las "
+            "señales estadísticas del universo activo. Revísalos como punto de "
+            "partida; el tamaño de muestra por segmento condiciona la confianza."
         )
 
 
