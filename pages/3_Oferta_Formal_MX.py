@@ -60,8 +60,11 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_oferta_formal_data_v4() -> pd.DataFrame:
-    """v4: agrega hubspot_owner_id + owner_name (LEFT JOIN owners)."""
+def load_oferta_formal_data_v5() -> pd.DataFrame:
+    """v5: agrega columnas de segmentación (razon_venta, ciudad_mx,
+    final_prestamo_mx). El bump de versión invalida el cache en disco de
+    Streamlit Cloud, que de otro modo seguiría sirviendo el df viejo sin
+    estas columnas (el cuerpo de esta función no cambió, solo bigquery.py)."""
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -71,7 +74,8 @@ def load_oferta_formal_data_v4() -> pd.DataFrame:
 
 
 # Alias para retro-compat con resto del código
-load_abc_data = load_oferta_formal_data_v4
+load_abc_data = load_oferta_formal_data_v5
+load_oferta_formal_data_v4 = load_oferta_formal_data_v5  # alias legacy
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
@@ -347,14 +351,18 @@ with st.sidebar:
         _cutoff = _p99 * 2 if _p99 > 0 else float(_fp_pos.max())
         _robust_max = float(_fp_pos[_fp_pos <= _cutoff].max())
         fp_max = int(math.ceil(_robust_max / 100_000) * 100_000)
+        # Nunca dejar un rango degenerado (mín 100k de ancho).
+        fp_max = max(fp_max, 100_000)
     else:
-        fp_min, fp_max = 0, 1
+        # Sin montos disponibles (caché frío o columna ausente): rango nominal
+        # que mantiene el slider usable sin romper el layout.
+        fp_min, fp_max = 0, 5_000_000
     sel_precio = st.slider(
         "final_prestamo_mx",
         min_value=0,
         max_value=fp_max,
         value=(0, fp_max),
-        step=max((fp_max) // 100, 1),
+        step=max(fp_max // 100, 1000),
         format="$%d",
         label_visibility="collapsed",
         help="Rango de monto final del préstamo (MXN). Mueve los extremos para "
@@ -1415,13 +1423,19 @@ else:
 
     insight_rows = []
     if not seg_df.empty:
-        # Solo señales accionables (sin segmentos con dato faltante)
+        # Solo señales accionables (sin segmentos con dato faltante).
         cand = seg_df[(seg_df["p-value"] < 0.10) & (seg_df["_absp"] >= 5)].copy()
-        cand = cand[cand["vals"].apply(_is_actionable)]
-        cand = cand.sort_values(["_absp", "Aprobados"], ascending=[False, False])
-        pos = cand[cand["vs baseline (pp)"] > 0].head(3)
-        neg = cand[cand["vs baseline (pp)"] < 0].head(2)
-        insight_rows = list(pos.to_dict("records")) + list(neg.to_dict("records"))
+        if not cand.empty:
+            # Máscara booleana explícita: si cand quedara vacío, cand["vals"]
+            # sería una Serie object vacía y cand[serie] se interpretaría como
+            # selección de columnas (df sin columnas → KeyError en sort_values).
+            mask_act = cand["vals"].apply(_is_actionable).astype(bool)
+            cand = cand[mask_act]
+        if not cand.empty:
+            cand = cand.sort_values(["_absp", "Aprobados"], ascending=[False, False])
+            pos = cand[cand["vs baseline (pp)"] > 0].head(3)
+            neg = cand[cand["vs baseline (pp)"] < 0].head(2)
+            insight_rows = list(pos.to_dict("records")) + list(neg.to_dict("records"))
 
     if not insight_rows:
         st.info(
