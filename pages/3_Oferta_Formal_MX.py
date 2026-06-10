@@ -60,11 +60,11 @@ COLOR_CVR_RTA = "#06b6d4"       # cyan
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · Oferta formal MX…", persist="disk")
-def load_oferta_formal_data_v5() -> pd.DataFrame:
-    """v5: agrega columnas de segmentación (razon_venta, ciudad_mx,
-    final_prestamo_mx). El bump de versión invalida el cache en disco de
-    Streamlit Cloud, que de otro modo seguiría sirviendo el df viejo sin
-    estas columnas (el cuerpo de esta función no cambió, solo bigquery.py)."""
+def load_oferta_formal_data_v6() -> pd.DataFrame:
+    """v6: igual que v5 (columnas de segmentación). El análisis ahora agrupa
+    por zona metropolitana derivada en la página; el bump de versión solo
+    asegura que Streamlit Cloud no sirva un df cacheado previo sin las
+    columnas razon_venta/ciudad_mx/final_prestamo_mx."""
     df = bq_src.fetch_abc_test_landing_co()
     for col in ("fecha_aprobado", "fecha_aprobado_semana", "fecha_cierre",
                 "v_fecha_promesa", "fecha_cierre_efectiva", "fecha_ofertado"):
@@ -74,8 +74,9 @@ def load_oferta_formal_data_v5() -> pd.DataFrame:
 
 
 # Alias para retro-compat con resto del código
-load_abc_data = load_oferta_formal_data_v5
-load_oferta_formal_data_v4 = load_oferta_formal_data_v5  # alias legacy
+load_abc_data = load_oferta_formal_data_v6
+load_oferta_formal_data_v5 = load_oferta_formal_data_v6  # alias legacy
+load_oferta_formal_data_v4 = load_oferta_formal_data_v6  # alias legacy
 
 
 @st.cache_data(ttl=DAY, show_spinner="BigQuery · eventos landing…", persist="disk")
@@ -207,6 +208,98 @@ df["ciudad_mx"] = (
     .replace({"": CIUDAD_NA, "nan": CIUDAD_NA, "None": CIUDAD_NA, "<NA>": CIUDAD_NA})
 )
 df["final_prestamo_mx"] = pd.to_numeric(df["final_prestamo_mx"], errors="coerce")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mapeo municipio → Zona Metropolitana (ZM). El análisis de insights se hace a
+# nivel de ZM (no de municipio): los municipios sueltos tienen muestras chicas;
+# agregarlos por zona conurbada da señal estadística mucho más robusta y
+# accionable para zonificar la landing. Basado en las delimitaciones oficiales
+# de zonas metropolitanas de México (SEDATU/CONAPO/INEGI).
+# ─────────────────────────────────────────────────────────────────────────────
+ZONA_NA = "(sin zona)"
+
+MUNICIPIO_A_ZONA: dict[str, str] = {
+    # ── ZM Valle de México (CDMX + conurbados Edomex/Hidalgo) ──
+    "Ciudad de México": "ZM Valle de México",
+    "Huehuetoca": "ZM Valle de México",
+    "Zumpango": "ZM Valle de México",
+    "Tizayuca": "ZM Valle de México",          # Hidalgo, integrado a ZMVM (2005)
+    "Coacalco de Berriozábal": "ZM Valle de México",
+    "Tecámac": "ZM Valle de México",
+    "Ixtapaluca": "ZM Valle de México",
+    "Tultitlán": "ZM Valle de México",
+    "Chicoloapan": "ZM Valle de México",
+    "Atizapán de Zaragoza": "ZM Valle de México",
+    "Cuautitlán": "ZM Valle de México",
+    "Cuautitlán Izcalli": "ZM Valle de México",
+    "Tultepec": "ZM Valle de México",
+    "Nicolás Romero": "ZM Valle de México",
+    "Chalco": "ZM Valle de México",
+    "Acolman": "ZM Valle de México",
+    "Tlalnepantla de Baz": "ZM Valle de México",
+    "Nextlalpan": "ZM Valle de México",
+    "Naucalpan de Juárez": "ZM Valle de México",
+    "Teoloyucan": "ZM Valle de México",
+    "Valle de Chalco Solidaridad": "ZM Valle de México",
+    "Huixquilucan": "ZM Valle de México",
+    "Melchor Ocampo": "ZM Valle de México",
+    "Nezahualcóyotl": "ZM Valle de México",
+    # ── ZM Guadalajara (Jalisco) ──
+    "Zapopan": "ZM Guadalajara",
+    "Tlajomulco de Zúñiga": "ZM Guadalajara",
+    "San Pedro Tlaquepaque": "ZM Guadalajara",
+    "Guadalajara": "ZM Guadalajara",
+    "Tonalá": "ZM Guadalajara",
+    "El Salto": "ZM Guadalajara",
+    "Juanacatlán": "ZM Guadalajara",
+    # ── ZM Monterrey (Nuevo León) ──
+    "Apodaca": "ZM Monterrey",
+    "García": "ZM Monterrey",
+    "General Escobedo": "ZM Monterrey",
+    "Guadalupe": "ZM Monterrey",
+    "Salinas Victoria": "ZM Monterrey",
+    "San Nicolás de los Garza": "ZM Monterrey",
+    "Monterrey": "ZM Monterrey",
+    "Pesquería": "ZM Monterrey",
+    "General Zuazua": "ZM Monterrey",
+    "Santa Catarina": "ZM Monterrey",
+    "El Carmen": "ZM Monterrey",
+    "Cadereyta Jiménez": "ZM Monterrey",
+    "Ciénega de Flores": "ZM Monterrey",
+    "Juárez": "ZM Monterrey",                  # Juárez NL (corredor habitacional)
+    # ── ZM Toluca (Edomex) ──
+    "Toluca": "ZM Toluca",
+    "Metepec": "ZM Toluca",
+    "Zinacantepec": "ZM Toluca",
+    "San Mateo Atenco": "ZM Toluca",
+    "Almoloya de Juárez": "ZM Toluca",
+    "Temoaya": "ZM Toluca",
+    "Chapultepec": "ZM Toluca",
+    "Calimaya": "ZM Toluca",
+    "San Antonio la Isla": "ZM Toluca",
+    "Lerma": "ZM Toluca",
+    # ── ZM León / Bajío (Guanajuato) ──
+    "León": "ZM León",
+    # ── ZM Querétaro ──
+    "Querétaro": "ZM Querétaro",
+    "El Marqués": "ZM Querétaro",
+    "Corregidora": "ZM Querétaro",
+    "Apaseo el Grande": "ZM Querétaro",        # Guanajuato, conurbado a Qro
+    # ── ZM Pachuca (Hidalgo) ──
+    "Mineral de la Reforma": "ZM Pachuca",
+    "Pachuca de Soto": "ZM Pachuca",
+    "Zempoala": "ZM Pachuca",
+}
+
+df["zona_metropolitana"] = (
+    df["ciudad_mx"].map(MUNICIPIO_A_ZONA).fillna(ZONA_NA)
+)
+# Los municipios sin mapear quedan como "(otra · <municipio>)" para no perderlos
+_sin_zona = df["zona_metropolitana"] == ZONA_NA
+df.loc[_sin_zona & (df["ciudad_mx"] != CIUDAD_NA), "zona_metropolitana"] = (
+    "(otra · " + df.loc[_sin_zona & (df["ciudad_mx"] != CIUDAD_NA), "ciudad_mx"] + ")"
+)
 
 
 def _price_buckets(series: pd.Series, n: int = 5) -> tuple[list[float], list[str]]:
@@ -1203,10 +1296,11 @@ st.markdown("<div style='height:32px'></div>", unsafe_allow_html=True)
 st.markdown("<h2>Análisis e Insights · segmentación</h2>", unsafe_allow_html=True)
 st.markdown(
     f"<div style='color:{MED};font-size:0.82rem;margin-bottom:6px'>"
-    "Cruce de <b>razón de venta</b> × <b>ciudad</b> × <b>rango de monto del "
-    "préstamo</b> sobre la conversión aprobado→cierre (CVR). Solo se reportan "
-    "los segmentos con señal estadística vs. el resto del universo. "
-    "Respeta los filtros del sidebar.</div>",
+    "Cruce de <b>razón de venta</b> × <b>zona metropolitana</b> × <b>rango de "
+    "monto del préstamo</b> sobre la conversión aprobado→cierre (CVR). El "
+    "mapeo geográfico es por zona metropolitana (no municipio) para agregar "
+    "muestra y dar señal robusta. Solo se reportan los segmentos con señal "
+    "estadística vs. el resto del universo. Respeta los filtros del sidebar.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1224,6 +1318,10 @@ else:
     _ins_base["cerro"] = _ins_base["fecha_cierre_efectiva"].notna()
     _ins_base["razon_venta"] = _ins_base["razon_venta"].fillna(RAZON_NA).astype(str)
     _ins_base["ciudad_mx"] = _ins_base["ciudad_mx"].fillna(CIUDAD_NA).astype(str)
+    if "zona_metropolitana" not in _ins_base.columns:
+        _ins_base["zona_metropolitana"] = _ins_base["ciudad_mx"].map(
+            MUNICIPIO_A_ZONA).fillna(ZONA_NA)
+    _ins_base["zona_metropolitana"] = _ins_base["zona_metropolitana"].fillna(ZONA_NA).astype(str)
 
     # Buckets de monto sobre el universo activo
     _edges, _labels = _price_buckets(_ins_base["final_prestamo_mx"])
@@ -1246,8 +1344,8 @@ else:
     with k3:
         st.markdown(kpi_card("CVR baseline", f"{cvr_base*100:.1f}%"), unsafe_allow_html=True)
     with k4:
-        st.markdown(kpi_card("Ciudades activas",
-                             f"{_ins_base['ciudad_mx'].nunique():,}"),
+        st.markdown(kpi_card("Zonas metro activas",
+                             f"{_ins_base['zona_metropolitana'].nunique():,}"),
                     unsafe_allow_html=True)
 
     # ── z-test de dos proporciones (segmento vs. resto) sin scipy ──
@@ -1313,24 +1411,24 @@ else:
                  "CVR por razón de venta × rango de monto", "heat_razon_precio")
 
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-    top_ciudades = (
-        _ins_base[_ins_base["ciudad_mx"] != CIUDAD_NA]["ciudad_mx"]
-        .value_counts().head(8).index.tolist()
+    top_zonas = (
+        _ins_base[~_ins_base["zona_metropolitana"].isin([ZONA_NA])]
+        ["zona_metropolitana"].value_counts().head(8).index.tolist()
     )
-    if top_ciudades:
-        _heatmap_cvr("ciudad_mx", top_ciudades,
-                     "CVR por ciudad (top 8 por volumen) × rango de monto",
-                     "heat_ciudad_precio")
+    if top_zonas:
+        _heatmap_cvr("zona_metropolitana", top_zonas,
+                     "CVR por zona metropolitana × rango de monto",
+                     "heat_zona_precio")
 
-    # ── Escaneo de segmentos: 1, 2 y 3 dimensiones ──
+    # ── Escaneo de segmentos: 1, 2 y 3 dimensiones (zona, no municipio) ──
     GROUPINGS = [
         (["razon_venta"], "Razón"),
-        (["ciudad_mx"], "Ciudad"),
+        (["zona_metropolitana"], "Zona"),
         (["price_bucket"], "Monto"),
         (["razon_venta", "price_bucket"], "Razón × Monto"),
-        (["ciudad_mx", "price_bucket"], "Ciudad × Monto"),
-        (["razon_venta", "ciudad_mx"], "Razón × Ciudad"),
-        (["razon_venta", "ciudad_mx", "price_bucket"], "Razón × Ciudad × Monto"),
+        (["zona_metropolitana", "price_bucket"], "Zona × Monto"),
+        (["razon_venta", "zona_metropolitana"], "Razón × Zona"),
+        (["razon_venta", "zona_metropolitana", "price_bucket"], "Razón × Zona × Monto"),
     ]
 
     seg_rows = []
@@ -1418,8 +1516,8 @@ else:
     st.markdown("<h3>Hipótesis y experimentos propuestos</h3>", unsafe_allow_html=True)
 
     def _is_actionable(vals: tuple) -> bool:
-        bad = {RAZON_NA, CIUDAD_NA, "(sin monto)"}
-        return not any(str(v) in bad for v in vals)
+        bad = {RAZON_NA, CIUDAD_NA, ZONA_NA, "(sin monto)"}
+        return not any(str(v) in bad or str(v).startswith("(otra ·") for v in vals)
 
     insight_rows = []
     if not seg_df.empty:
@@ -1459,18 +1557,16 @@ else:
             # Componentes legibles del segmento
             partes = {d: v for d, v in zip(dims, vals)}
             razon = partes.get("razon_venta")
-            ciudad = partes.get("ciudad_mx")
+            zona = partes.get("zona_metropolitana")
             precio = partes.get("price_bucket")
 
             seg_desc = []
             if razon:
                 seg_desc.append(f"razón de venta <b>{razon}</b>")
-            if ciudad:
-                seg_desc.append(f"en <b>{ciudad}</b>")
+            if zona:
+                seg_desc.append(f"en <b>{zona}</b>")
             if precio:
                 seg_desc.append(f"con préstamo en el rango <b>{precio}</b>")
-            # Construir frase legible: si arranca con "en …" o "con …" evitar el
-            # "El segmento de en …" agregando un sustantivo de enlace.
             if seg_desc:
                 first = seg_desc[0]
                 if first.startswith("razón"):
@@ -1479,75 +1575,122 @@ else:
                     seg_txt = "clientes " + " ".join(seg_desc)
             else:
                 seg_txt = seg
+            zona_txt = zona or "la zona"
+            razon_txt = razon or "su motivo de venta"
 
             signo = "↑ mejor" if mejor else "↓ peor"
             color = "#16a34a" if mejor else "#dc2626"
 
-            # Insight
+            # Tamaño de muestra para experimento: regla práctica de proporciones.
+            # Para detectar un lift de ~10pp con poder ~80% y alfa 0.05 se necesitan
+            # ~300 por brazo; lo bajamos a un objetivo operativo de cierres por brazo.
+            n_objetivo = 30 if abs(lift) >= 15 else 50
+
+            # ── Framework PM ──
+            # 1) Insight (evidencia observada)
             insight = (
                 f"El segmento de {seg_txt} cierra a <b>{cvr:.1f}%</b> "
                 f"({signo} que el baseline de {cvr_base*100:.1f}%, "
-                f"{lift:+.1f} pp; n={n} aprobados, {cierres} cierres, "
+                f"<b>{lift:+.1f} pp</b>; n={n} aprobados, {cierres} cierres, "
                 f"p={p:.3f})."
             )
 
-            # Hipótesis
+            # 2) Supuesto riesgoso (lo que asumimos y que el experimento valida)
+            if mejor:
+                supuesto = (
+                    f"Asumimos que el alto cierre de {zona_txt} en este perfil es "
+                    "<b>causado por el ajuste oferta-cliente</b> (precio acorde, "
+                    "menor competencia, urgencia real) y no un artefacto de mezcla "
+                    "(p. ej. inventario o equipo comercial). Riesgo Value/Viability: "
+                    "que personalizar la landing no añada lift porque el cierre ya "
+                    "está saturado en ese segmento."
+                )
+            else:
+                supuesto = (
+                    f"Asumimos que el bajo cierre de {zona_txt} en este perfil es "
+                    "<b>un problema de propuesta/fricción atacable desde la landing</b> "
+                    "(precio percibido, claridad del trámite, confianza) y no un "
+                    "límite estructural de demanda en la zona. Riesgo Value: que la "
+                    "brecha venga de factores fuera de la landing (competencia de "
+                    "precio, perfil de riesgo) y el rediseño no la cierre."
+                )
+
+            # 3) Hipótesis (formato Creemos que… / Lo sabremos si…)
             if mejor:
                 hipo = (
-                    f"Si la landing enviada a {seg_txt} resalta los "
-                    "mensajes que ya resuenan con este segmento (prueba social "
-                    "local, comparables de la zona, encuadre del beneficio según "
-                    f"la razón «{razon or 'su motivo'}»), entonces la conversión "
-                    "aprobado→cierre subirá aún más, porque el segmento ya muestra "
-                    "intención de cierre por encima de la media."
-                )
-                experimento = (
-                    f"<b>A/B zonificado</b> sobre {ciudad or 'la zona'}: variante "
-                    "tratamiento = landing personalizada para este segmento "
-                    f"(copy según razón «{razon or '—'}»"
-                    + (f", comparables y rango de oferta calibrados a {precio}" if precio else "")
-                    + "). Control = landing estándar. Métrica primaria: CVR "
-                    "aprobado→cierre. Asignación 50/50 sobre los nuevos aprobados "
-                    "del segmento; correr hasta acumular ≥30 cierres por brazo o "
-                    "4 semanas. Como este segmento ya convierte alto, el upside "
-                    "es defenderlo y escalar el copy ganador a zonas similares."
+                    f"<i>Creemos que</i> si a {seg_txt} le enviamos una landing "
+                    f"zonificada para {zona_txt} (prueba social local, comparables "
+                    f"de la zona y encuadre del beneficio según «{razon_txt}»), "
+                    "<i>entonces</i> el CVR aprobado→cierre subirá por encima del "
+                    f"{cvr:.0f}% actual. <i>Lo sabremos cuando</i> el brazo "
+                    "tratamiento supere al control con significancia (z-test, "
+                    "p<0.05)."
                 )
             else:
                 hipo = (
-                    f"Si el bajo cierre de {seg_txt} se debe a una desconexión "
-                    "entre la oferta mostrada y la expectativa del cliente "
-                    "(precio percibido, urgencia, claridad del trámite), entonces "
-                    "rediseñar la landing para este segmento —ajustando el encuadre "
-                    "de precio y reduciendo fricción— recuperará parte de la brecha "
-                    f"de {abs(lift):.1f} pp frente al baseline."
+                    f"<i>Creemos que</i> si a {seg_txt} le rediseñamos la landing "
+                    f"(encuadre de precio acorde a {precio or 'su rango'}, refuerzo "
+                    f"de valor para «{razon_txt}», trámite y CTA simplificados), "
+                    "<i>entonces</i> recuperaremos parte de la brecha de "
+                    f"{abs(lift):.1f} pp frente al baseline. <i>Lo sabremos cuando</i> "
+                    f"el CVR del segmento pase del {cvr:.0f}% hacia el "
+                    f"{cvr_base*100:.0f}% (baseline) con p<0.05."
                 )
-                experimento = (
-                    f"<b>Rediseño dirigido</b> para {seg_txt}: hipótesis de fricción "
-                    "→ landing con (a) encuadre de precio acorde al rango "
-                    f"{precio or 'del segmento'}, (b) refuerzo de la propuesta de "
-                    f"valor para «{razon or 'su motivo de venta'}», (c) CTA y "
-                    "trámite simplificados. A/B contra la landing actual; métrica "
-                    "primaria CVR aprobado→cierre, guardrail = tasa de respuesta. "
-                    "Si el segmento es de bajo volumen, correr primero una prueba "
-                    "cualitativa (5–8 entrevistas) antes del A/B cuantitativo."
+
+            # 4) Experimento (método, métrica, umbral, guardrail)
+            if mejor:
+                metodo = (
+                    f"<b>A/B test zonificado en producción</b> sobre {zona_txt}, "
+                    "filtrando al perfil del segmento. Tratamiento = landing "
+                    f"personalizada (copy «{razon_txt}»"
+                    + (f", comparables y oferta calibrados a {precio}" if precio else "")
+                    + "); Control = landing estándar. Asignación 50/50 entre nuevos "
+                    "aprobados del segmento. Mitigación de riesgo: solo se cambia el "
+                    "contenido de la landing (reversible), no la oferta ni el motor."
+                )
+                umbral = (
+                    f"<b>Éxito:</b> CVR tratamiento ≥ CVR control + 5 pp con p<0.05. "
+                    f"<b>Muestra objetivo:</b> ≥{n_objetivo} cierres por brazo o 4 "
+                    "semanas (lo que llegue primero)."
+                )
+            else:
+                metodo = (
+                    f"<b>Paso 1 — Discovery:</b> 5–8 entrevistas a aprobados que NO "
+                    f"cerraron en {zona_txt} para ubicar la fricción (precio, "
+                    "confianza, trámite). <b>Paso 2 — A/B test</b> de la landing "
+                    f"rediseñada contra la actual sobre el perfil del segmento. "
+                    "Mitigación: discovery barato antes de invertir en build; el "
+                    "A/B solo toca contenido de landing."
+                )
+                umbral = (
+                    f"<b>Éxito:</b> CVR del tratamiento sube ≥5 pp sobre el "
+                    f"{cvr:.0f}% actual con p<0.05, sin degradar la tasa de "
+                    f"respuesta (<b>guardrail</b>). <b>Muestra objetivo:</b> "
+                    f"≥{n_objetivo} cierres por brazo o 4 semanas."
                 )
 
             with st.container():
                 st.markdown(
-                    f"<div style='border-left:4px solid {color};padding:10px 16px;"
-                    f"background:{WHITE};border-radius:8px;margin-bottom:14px;"
+                    f"<div style='border-left:4px solid {color};padding:12px 18px;"
+                    f"background:{WHITE};border-radius:8px;margin-bottom:16px;"
                     f"box-shadow:0 1px 3px rgba(0,0,0,0.06)'>"
                     f"<div style='font-weight:700;color:{DEEP};font-size:0.95rem;"
-                    f"margin-bottom:4px'>Insight {idx} · {fam}</div>"
-                    f"<div style='font-size:0.86rem;color:#333;margin-bottom:8px'>"
+                    f"margin-bottom:6px'>Insight {idx} · {fam}</div>"
+                    f"<div style='font-size:0.86rem;color:#333;margin-bottom:10px'>"
                     f"{insight}</div>"
-                    f"<div style='font-size:0.82rem;color:{DEEP};font-weight:600'>"
-                    "Hipótesis</div>"
+                    f"<div style='font-size:0.8rem;color:{DEEP};font-weight:700;"
+                    f"text-transform:uppercase;letter-spacing:.04em'>Supuesto riesgoso</div>"
+                    f"<div style='font-size:0.84rem;color:#333;margin-bottom:8px'>"
+                    f"{supuesto}</div>"
+                    f"<div style='font-size:0.8rem;color:{DEEP};font-weight:700;"
+                    f"text-transform:uppercase;letter-spacing:.04em'>Hipótesis</div>"
                     f"<div style='font-size:0.84rem;color:#333;margin-bottom:8px'>"
                     f"{hipo}</div>"
-                    f"<div style='font-size:0.82rem;color:{DEEP};font-weight:600'>"
-                    "Experimento propuesto</div>"
-                    f"<div style='font-size:0.84rem;color:#333'>{experimento}</div>"
+                    f"<div style='font-size:0.8rem;color:{DEEP};font-weight:700;"
+                    f"text-transform:uppercase;letter-spacing:.04em'>Experimento · método</div>"
+                    f"<div style='font-size:0.84rem;color:#333;margin-bottom:6px'>"
+                    f"{metodo}</div>"
+                    f"<div style='font-size:0.84rem;color:#166534'>{umbral}</div>"
                     "</div>",
                     unsafe_allow_html=True,
                 )
@@ -1556,9 +1699,11 @@ else:
             _experiment_card(rec, i)
 
         st.caption(
-            "Hipótesis y experimentos generados automáticamente a partir de las "
-            "señales estadísticas del universo activo. Revísalos como punto de "
-            "partida; el tamaño de muestra por segmento condiciona la confianza."
+            "Insights, supuestos, hipótesis y experimentos generados con framework "
+            "de Product Discovery (supuesto riesgoso → hipótesis Creemos/Lo sabremos "
+            "→ experimento con método, umbral de éxito y guardrail) sobre las señales "
+            "estadísticas del universo activo. El tamaño de muestra por segmento "
+            "condiciona la confianza; trátalos como punto de partida priorizable."
         )
 
 
