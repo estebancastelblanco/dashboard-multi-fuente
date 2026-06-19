@@ -83,6 +83,11 @@ st.markdown(
 
 DAY = 86400
 SHORT = 120
+# TTL del funnel: las queries de etapas en BQ son baratas y son justo lo que
+# "avanza" día a día. Cachearlas 24h hacía que el funnel se viera congelado
+# aunque BigQuery ya tuviera el avance. 30 min equilibra frescura vs costo;
+# el botón "Actualizar datos" sigue forzando refetch inmediato.
+FUNNEL_TTL = 1800
 START_DATE = EXPERIMENT.start_date
 WA_DELIVERY = EXPERIMENT.funnel_baseline.get("wa_delivery_ratio", 0.80)
 LANDING_SHEET_ID = EXPERIMENT.funnel_baseline.get("landing_sheet_id")
@@ -131,7 +136,7 @@ def _is_exp_row(row) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Loaders cacheados
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=DAY, show_spinner="HubSpot · deals seller (tratamiento)…", persist="disk")
+@st.cache_data(ttl=FUNNEL_TTL, show_spinner="HubSpot · deals seller (tratamiento)…", persist="disk")
 def load_seller_deals(since_iso: str, until_iso: str) -> pd.DataFrame:
     """Tratamiento: contacto_digital=seller."""
     return hs_src.fetch_preoferta_deals(since_iso, until_iso, contacto_digital="seller")
@@ -169,12 +174,12 @@ def load_nid_mapping(deal_uuids: tuple[str, ...]) -> pd.DataFrame:
     return bq_src.fetch_nid_for_uuids(list(deal_uuids))
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel etapas MX…", persist="disk")
+@st.cache_data(ttl=FUNNEL_TTL, show_spinner="BigQuery · funnel etapas MX…", persist="disk")
 def load_funnel_mex(nids: tuple[int, ...], date_from: str, date_to: str) -> pd.DataFrame:
     return bq_src.fetch_funnel_mex(list(nids), date_from=date_from, date_to=date_to)
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · A/B funnel MX…")
+@st.cache_data(ttl=FUNNEL_TTL, show_spinner="BigQuery · A/B funnel MX…")
 def load_ab_funnel_mex_v2(since_iso: str, until_iso: str) -> pd.DataFrame:
     """Funnel A/B armado en BQ: cada (nid, grupo) con sus etapas.
 
@@ -185,7 +190,7 @@ def load_ab_funnel_mex_v2(since_iso: str, until_iso: str) -> pd.DataFrame:
     return bq_src.fetch_ab_funnel_mex(since_iso, until_iso)
 
 
-@st.cache_data(ttl=DAY, show_spinner="BigQuery · funnel mensual MX…")
+@st.cache_data(ttl=FUNNEL_TTL, show_spinner="BigQuery · funnel mensual MX…")
 def load_funnel_monthly_mex_ab(since_iso: str, until_iso: str) -> pd.DataFrame:
     """Funnel mensual A/B. Renombrada de load_funnel_monthly_mex para invalidar
     el cache de disco que tenía la versión sin la columna `grupo`."""
@@ -494,6 +499,14 @@ PALETTE_TRATAMIENTO = [FUNNEL_STAGE_COLORS[k] for k in COMPARE_STAGE_KEYS]
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h2>Embudo del experimento · tratamiento</h2>", unsafe_allow_html=True)
 
+# Sello de frescura: deja ver hasta cuándo llegan los datos y cuándo se cargaron.
+_max_cd = pd.to_datetime(df_t.get("createdate"), errors="coerce").max()
+_max_cd_txt = _max_cd.strftime("%Y-%m-%d %H:%M") if pd.notna(_max_cd) else "—"
+st.caption(
+    f"Datos cargados {datetime.now():%Y-%m-%d %H:%M} · último deal seller creado {_max_cd_txt} · "
+    f"cache del funnel {FUNNEL_TTL // 60} min · «Actualizar datos» (sidebar) refresca al instante."
+)
+
 # Helper para contar leads en una etapa del funnel BQ, restringido a nids
 # del df filtrado.
 nids_f = set(df_t_f["nid"].dropna().astype(int).tolist()) if "nid" in df_t_f.columns else set()
@@ -704,22 +717,26 @@ with col_t:
         use_container_width=True,
     )
 
-cvr_c = vals_c[-1] / vals_c[1] if len(vals_c) > 1 and vals_c[1] > 0 else 0.0
-cvr_t = vals_t[-1] / vals_t[1] if len(vals_t) > 1 and vals_t[1] > 0 else 0.0
+# Métrica titular = asignación→APROBADO (índices 1 y 5 en COMPARE_STAGES).
+# El cierre (índice -1) NO es titular: su ciclo es más largo que la vida del
+# experimento, así que comparar cierres entre cohortes jóvenes no concluye nada.
+ASIG_IDX, APROBADO_IDX = 1, 5
+cvr_c = vals_c[APROBADO_IDX] / vals_c[ASIG_IDX] if len(vals_c) > APROBADO_IDX and vals_c[ASIG_IDX] > 0 else 0.0
+cvr_t = vals_t[APROBADO_IDX] / vals_t[ASIG_IDX] if len(vals_t) > APROBADO_IDX and vals_t[ASIG_IDX] > 0 else 0.0
 delta_cvr_main_pp = (cvr_t - cvr_c) * 100
 delta_color = GREEN_DARK if delta_cvr_main_pp >= 0 else RED
 st.markdown(
     f"<div style='display:flex;gap:14px;margin-top:6px'>"
     f"<div style='flex:1;background:{WHITE};border-left:4px solid {PRIMARY};"
     f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
-    f"<b>Control · CVR asignación→cierre</b>"
+    f"<b>Control · CVR asignación→aprobado</b>"
     f"<div style='font-size:1.3rem;font-weight:700;color:{PRIMARY}'>"
-    f"{cvr_c*100:.2f}% · {vals_c[-1]}/{vals_c[1]}</div></div>"
+    f"{cvr_c*100:.2f}% · {vals_c[APROBADO_IDX]}/{vals_c[ASIG_IDX]}</div></div>"
     f"<div style='flex:1;background:{WHITE};border-left:4px solid {GREEN_DARK};"
     f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
-    f"<b>Tratamiento · CVR asignación→cierre</b>"
+    f"<b>Tratamiento · CVR asignación→aprobado</b>"
     f"<div style='font-size:1.3rem;font-weight:700;color:{GREEN_DARK}'>"
-    f"{cvr_t*100:.2f}% · {vals_t[-1]}/{vals_t[1]}</div></div>"
+    f"{cvr_t*100:.2f}% · {vals_t[APROBADO_IDX]}/{vals_t[ASIG_IDX]}</div></div>"
     f"<div style='flex:1;background:{WHITE};border-left:4px solid {delta_color};"
     f"padding:10px 14px;border-radius:6px;font-size:0.82rem'>"
     f"<b>Δ Tratamiento - Control</b>"
@@ -727,6 +744,14 @@ st.markdown(
     f"{delta_cvr_main_pp:+.2f}pp</div></div>"
     f"</div>",
     unsafe_allow_html=True,
+)
+st.caption(
+    "Comparación rate-based anclada en ASIGNACIÓN. El control es toda la "
+    "población no-seller creada en la ventana, así que «Lead llega» (universo) "
+    f"NO es comparable en volumen ({vals_c[0]:,} vs {vals_t[0]:,}) — léelo solo "
+    "como CVR etapa-a-etapa desde asignación. Métrica titular asignación→"
+    f"aprobado. Cierre NO concluyente aún (control {vals_c[-1]} vs tratamiento "
+    f"{vals_t[-1]}): el ciclo a cierre supera la duración del experimento."
 )
 
 

@@ -126,4 +126,19 @@ REGISTRY: list[Experiment] = [
         ),
         attachments=[],
     ),
+    Experiment(
+        slug="bnpl-comerciales-co",
+        title="BNPL Comerciales · CO",
+        start_date="2026-06-06",
+        end_date=None,
+        design_doc_url=None,
+        results_doc_url=None,
+        page="pages/6_BNPL_Comerciales_CO.py",
+        description=(
+            "Negocios CO con ¿Negocio aplica para BNPL?=Sí que NO han cerrado, "
+            "por comercial (hubspot_owner_id). Cruza el Link Habi Capital con el "
+            "Sheet de leads para marcar si el cliente aplica (score ≥ 720)."
+        ),
+        attachments=[],
+    ),
 ]

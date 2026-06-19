@@ -104,18 +104,23 @@ def fetch_funnel_mex(
 def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.DataFrame:
     """Funnel A/B del experimento Pre-Oferta MX, calculado en BQ.
 
-    Devuelve un row por (nid, grupo, valor) donde:
-      - grupo = 'B' si el deal HubSpot tiene contacto_digital='seller' creado
-                dentro de la ventana del experimento (universo del tratamiento)
-      - grupo = 'A' = TODO el funnel MX que pasó por alguna etapa en el rango
-                y NO es del tratamiento. Incluye deals viejos cuyo cierre
-                cayó en mayo aunque hayan sido creados meses antes.
+    A/B LIMPIO (cohortes simétricas): ambos grupos son deals CREADOS dentro de
+    la ventana [since_iso, until_iso], para que la comparación mida el efecto
+    del tratamiento y no la edad de la cohorte.
+      - grupo = 'B' (tratamiento): deals con contacto_digital='seller' creados
+                en la ventana.
+      - grupo = 'A' (control): deals NO-seller (contacto_digital != 'seller' o
+                null) creados en la MISMA ventana.
 
-    Esto hace que el funnel A muestre los 55 cierres OCD reales del producto
-    (matchea con el funnel mensual MX), no solo la cohorte del experimento.
+    OJO: antes el control eran "todos los nids con actividad de funnel en el
+    rango", lo que incluía deals legacy creados meses atrás y ya maduros. Eso
+    inflaba los cierres del control (176 vs 2) y sesgaba el A/B: medía edad de
+    cohorte, no tratamiento. Como un cierre tarda más que la vida del
+    experimento, la métrica titular debe ser asignación→aprobado (alcanzable),
+    no asignación→cierre. El "funnel de producto completo" (con legacy) vive
+    aparte en `fetch_funnel_monthly_mex`.
 
-    Tanto el universo del control como el funnel (fecha de etapa) respetan
-    el rango [since_iso, until_iso].
+    Las etapas (fecha) también respetan el rango [since_iso, until_iso].
     """
     if not until_iso:
         until_iso = "9999-12-31"
@@ -124,6 +129,14 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
       SELECT DISTINCT CAST(nid AS INT64) AS nid
       FROM `sellers-main-prod.hubspot.deals`
       WHERE LOWER(contacto_digital) = 'seller'
+        AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
+        AND nid IS NOT NULL
+    ),
+    control_nids AS (
+      -- Control simétrico: deals NO-seller creados en la MISMA ventana.
+      SELECT DISTINCT CAST(nid AS INT64) AS nid
+      FROM `sellers-main-prod.hubspot.deals`
+      WHERE (contacto_digital IS NULL OR LOWER(contacto_digital) != 'seller')
         AND DATE(createdate) BETWEEN '{since_iso}' AND '{until_iso}'
         AND nid IS NOT NULL
     ),
@@ -136,22 +149,10 @@ def fetch_ab_funnel_mex(since_iso: str, until_iso: str | None = None) -> pd.Data
       WHERE DATE(fecha) BETWEEN '{since_iso}' AND '{until_iso}'
       GROUP BY nid, valor
     ),
-    universe_a AS (
-      -- Todos los nids del funnel MX que NO son del experimento (tratamiento)
-      SELECT DISTINCT f.nid, 'A' AS grupo
-      FROM funnel f
-      LEFT JOIN seller_nids s USING(nid)
-      WHERE s.nid IS NULL
-    ),
-    universe_b AS (
-      -- Universo del experimento: deals seller creados en la ventana,
-      -- aunque todavía no hayan pasado por ninguna etapa
-      SELECT DISTINCT nid, 'B' AS grupo FROM seller_nids
-    ),
     universos AS (
-      SELECT * FROM universe_a
+      SELECT nid, 'A' AS grupo FROM control_nids
       UNION ALL
-      SELECT * FROM universe_b
+      SELECT nid, 'B' AS grupo FROM seller_nids
     )
     SELECT
       u.nid,
@@ -688,6 +689,38 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
     return df
+
+
+def fetch_bnpl_co_enrichment(deal_uuids: list[str]) -> pd.DataFrame:
+    """deal_uuid → nid + equipo_sellers para el tablero BNPL Comerciales CO.
+
+    nid viene de `hubspot.deals` (la propiedad nid de HubSpot suele venir vacía
+    en la API). equipo_sellers viene de `detalle_ofertas_col` (solo poblado para
+    deals que ya tienen oferta; el resto queda nulo).
+    """
+    if not deal_uuids:
+        return pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
+    frames: list[pd.DataFrame] = []
+    for i in range(0, len(deal_uuids), 5000):
+        chunk = [u for u in deal_uuids[i:i + 5000] if u]
+        if not chunk:
+            continue
+        lst = ",".join(f'"{u.lower()}"' for u in chunk)
+        sql = f"""
+        SELECT
+          LOWER(d.deal_uuid) AS deal_uuid,
+          ANY_VALUE(CAST(d.nid AS INT64)) AS nid,
+          ANY_VALUE(dox.equipo_sellers) AS equipo_sellers
+        FROM `sellers-main-prod.hubspot.deals` d
+        LEFT JOIN `papyrus-data.habi_wh.detalle_ofertas_col` dox
+          ON CAST(dox.nid AS INT64) = CAST(d.nid AS INT64)
+        WHERE LOWER(d.deal_uuid) IN ({lst})
+        GROUP BY 1
+        """
+        frames.append(_client().query(sql).to_dataframe())
+    if not frames:
+        return pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
+    return pd.concat(frames, ignore_index=True).drop_duplicates("deal_uuid")
 
 
 def fetch_oferta_formal_col_envios_wa() -> pd.DataFrame:
