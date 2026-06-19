@@ -270,16 +270,16 @@ def list_deal_properties() -> pd.DataFrame:
 # BNPL Comerciales CO · deals con ¿Negocio aplica para BNPL?=Sí (sin hipoteca)
 # ─────────────────────────────────────────────────────────────────────────────
 BNPL_CO_PROPS: dict[str, str] = {
-    "hs_object_id":               "ID de registro",
+    "hs_object_id":               "ID de registro",  # = nid (así lo llamamos)
     "dealname":                   "Nombre del negocio",
     "deal_uuid":                  "deal_uuid",
-    "nid":                        "nid",
     "link_habi_capital":          "Link Habi Capital",
     "hubspot_owner_id":           "Propietario del negocio",
     "dealstage":                  "Etapa",
     "pipeline":                   "Pipeline",
     "negocio_aplica_para_bnpl_":  "¿Negocio aplica para BNPL?",
     "estado":                     "Estado del Negocio",
+    "fecha_inmueble_aprobado":    "Fecha inmueble aprobado",
 }
 
 # Etapas (por label) que significan que el negocio YA avanzó/cerró con Habi y por
@@ -293,14 +293,24 @@ BNPL_EXCLUDED_STAGE_LABELS: list[str] = [
 ]
 
 
-def fetch_bnpl_co_deals() -> pd.DataFrame:
-    """Deals CO con negocio_aplica_para_bnpl_=true (sin hipoteca → ofertable)."""
+def fetch_bnpl_co_deals(aprobado_since_iso: str | None = None) -> pd.DataFrame:
+    """Deals CO con negocio_aplica_para_bnpl_=true (sin hipoteca → ofertable).
+
+    Si `aprobado_since_iso` (YYYY-MM-DD) se pasa, restringe a deals con
+    `fecha_inmueble_aprobado` >= esa fecha (cohorte por fecha de aprobación,
+    p.ej. "del 6 de junio en adelante").
+    """
     properties = list(BNPL_CO_PROPS.keys())
     url = "https://api.hubapi.com/crm/v3/objects/deals/search"
     filters = [
         {"propertyName": "country", "operator": "EQ", "value": "CO"},
         {"propertyName": "negocio_aplica_para_bnpl_", "operator": "EQ", "value": "true"},
     ]
+    if aprobado_since_iso:
+        since_ms = int(datetime.fromisoformat(aprobado_since_iso)
+                       .replace(tzinfo=timezone.utc).timestamp() * 1000)
+        filters.append({"propertyName": "fecha_inmueble_aprobado",
+                        "operator": "GTE", "value": str(since_ms)})
     rows: list[dict] = []
     after: str | None = None
     for _ in range(100):  # max 10000 deals

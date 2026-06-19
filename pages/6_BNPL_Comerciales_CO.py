@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -79,8 +79,8 @@ UUID_RX = re.compile(
 # Loaders
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · deals BNPL=Sí CO…", persist="disk")
-def load_bnpl_deals() -> pd.DataFrame:
-    return hs_src.fetch_bnpl_co_deals()
+def load_bnpl_deals(aprobado_since_iso: str) -> pd.DataFrame:
+    return hs_src.fetch_bnpl_co_deals(aprobado_since_iso=aprobado_since_iso)
 
 
 @st.cache_data(ttl=DAY, show_spinner="HubSpot · etapas de pipeline…", persist="disk")
@@ -128,16 +128,42 @@ APLICA_LABELS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Sidebar (parte 1) · botón + fecha de aprobación (parametriza la carga)
+# ─────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    if st.button("Actualizar datos", use_container_width=True,
+                 help="Refresca HubSpot, BigQuery y el Sheet de Habi Capital."):
+        for loader in (load_bnpl_deals, load_stages, load_enrichment, load_aplica_map):
+            try:
+                loader.clear()
+            except Exception:
+                pass
+        st.rerun()
+    st.markdown("---")
+    st.markdown(
+        f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>"
+        f"Filtros</div>", unsafe_allow_html=True,
+    )
+    st.markdown("### Fecha de aprobación desde")
+    aprob_desde = st.date_input(
+        "aprob_desde", value=date(2026, 6, 6), min_value=date(2026, 1, 1),
+        max_value=date.today(), label_visibility="collapsed",
+        help="fecha_inmueble_aprobado ≥ esta fecha (del 6-jun en adelante).",
+    )
+since_iso = (aprob_desde if isinstance(aprob_desde, date) else date(2026, 6, 6)).isoformat()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Carga + procesamiento
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    df = load_bnpl_deals()
+    df = load_bnpl_deals(since_iso)
 except Exception as exc:
     st.error(f"Error cargando HubSpot: {type(exc).__name__}: {exc}")
     st.stop()
 
 if df.empty:
-    st.warning("No hay negocios CO con ¿aplica BNPL?=Sí.")
+    st.warning(f"No hay negocios CO con ¿aplica BNPL?=Sí aprobados desde {since_iso}.")
     st.stop()
 
 stages = load_stages()
@@ -158,19 +184,22 @@ n_total = len(df)
 df = df[~df["dealstage"].isin(excluded_ids)].copy()
 n_excluidos = n_total - len(df)
 
-# Enriquecer con nid + equipo_sellers (BigQuery).
+# nid = el deal id de HubSpot (así lo llamamos en este tablero).
+df["nid"] = df["hs_object_id"].astype(str)
+df["fecha_aprobado"] = pd.to_datetime(df.get("fecha_inmueble_aprobado"), errors="coerce").dt.date
+
+# Enriquecer con equipo_sellers (BigQuery, vía deal_uuid → nid real → ofertas).
 uuids = tuple(sorted({u for u in df["uuid"].dropna().astype(str) if u}))
 try:
     df_enr = load_enrichment(uuids)
 except Exception as exc:
     df_enr = pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
     st.warning(f"BigQuery enriquecimiento: {type(exc).__name__}: {exc}")
-if not df_enr.empty:
+if not df_enr.empty and "equipo_sellers" in df_enr.columns:
     df_enr["deal_uuid"] = df_enr["deal_uuid"].astype(str).str.lower()
-    df = df.merge(df_enr, left_on="uuid", right_on="deal_uuid", how="left")
-for col in ("nid", "equipo_sellers"):
-    if col not in df.columns:
-        df[col] = pd.NA
+    df = df.merge(df_enr[["deal_uuid", "equipo_sellers"]], left_on="uuid", right_on="deal_uuid", how="left")
+if "equipo_sellers" not in df.columns:
+    df["equipo_sellers"] = pd.NA
 df["equipo_sellers"] = df["equipo_sellers"].fillna("(sin equipo)").astype(str).replace("", "(sin equipo)")
 df["hubspot_owner_id"] = df["hubspot_owner_id"].fillna("(sin owner)").astype(str)
 
@@ -181,23 +210,9 @@ df["aplica"] = df["aplica_raw"].map(lambda v: APLICA_LABELS.get(v, v))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar · filtros
+# Sidebar (parte 2) · filtros derivados de los datos cargados
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    if st.button("Actualizar datos", use_container_width=True,
-                 help="Refresca HubSpot, BigQuery y el Sheet de Habi Capital."):
-        for loader in (load_bnpl_deals, load_stages, load_enrichment, load_aplica_map):
-            try:
-                loader.clear()
-            except Exception:
-                pass
-        st.rerun()
-    st.markdown("---")
-    st.markdown(
-        f"<div style='color:{LIGHT};font-weight:700;font-size:0.9rem;margin-bottom:14px'>"
-        f"Filtros</div>", unsafe_allow_html=True,
-    )
-
     st.markdown("### Comercial (hubspot_owner_id)")
     owners_all = sorted(df["hubspot_owner_id"].dropna().astype(str).unique().tolist())
     sel_owners = st.multiselect(
@@ -253,9 +268,10 @@ c3.markdown(kpi_card("Link enviado", f"{n_enviados:,}", "aparece en el Sheet"), 
 c4.markdown(kpi_card("Aplica (≥720)", f"{n_aplica_si:,}", "score ≥ 720"), unsafe_allow_html=True)
 
 st.caption(
-    f"Universo: {n_total:,} negocios CO con ¿aplica BNPL?=Sí · "
-    f"{n_excluidos:,} excluidos por etapa avanzada/cerrada (oferta aceptada, "
-    f"legalizado, firmado, etc.) · {len(df):,} quedan activos."
+    f"Universo: {n_total:,} negocios CO con ¿aplica BNPL?=Sí aprobados desde "
+    f"{since_iso} · {n_excluidos:,} excluidos por etapa avanzada/cerrada (oferta "
+    f"aceptada, legalizado, firmado, etc.) · {len(df):,} quedan activos. "
+    f"nid = ID del deal en HubSpot."
 )
 
 
@@ -306,6 +322,7 @@ show_cols = [
     ("nid", "nid"),
     ("hubspot_owner_id", "Comercial (owner_id)"),
     ("equipo_sellers", "Equipo sellers"),
+    ("fecha_aprobado", "Fecha aprobado"),
     ("etapa", "Etapa"),
     ("aplica", "Aplica?"),
     ("link_habi_capital", "Link Habi Capital"),
