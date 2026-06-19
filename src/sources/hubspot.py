@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
@@ -219,8 +219,12 @@ def fetch_preoferta_deals(
         {"propertyName": "createdate", "operator": "GTE", "value": str(since_ms)},
     ]
     if until_iso:
-        until_ms = int(datetime.fromisoformat(until_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
-        filters.append({"propertyName": "createdate", "operator": "LTE", "value": str(until_ms)})
+        # Incluir el día COMPLETO de `until_iso`. Si convertimos a medianoche UTC
+        # y usamos LTE, se excluyen todos los deals creados durante el día de hoy
+        # (el funnel parece "no avanzar"). Sumamos 1 día y usamos LT.
+        until_dt = datetime.fromisoformat(until_iso).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        until_ms = int(until_dt.timestamp() * 1000)
+        filters.append({"propertyName": "createdate", "operator": "LT", "value": str(until_ms)})
     if contacto_digital is not None:
         filters.append({"propertyName": "contacto_digital", "operator": "EQ", "value": contacto_digital})
     for _ in range(100):
@@ -260,3 +264,80 @@ def list_deal_properties() -> pd.DataFrame:
     resp = _request_with_retry("GET", url, headers=_headers(), timeout=20)
     rows = [{"name": p["name"], "label": p.get("label", "")} for p in resp.json().get("results", [])]
     return pd.DataFrame(rows).sort_values("label").reset_index(drop=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BNPL Comerciales CO · deals con ¿Negocio aplica para BNPL?=Sí (sin hipoteca)
+# ─────────────────────────────────────────────────────────────────────────────
+BNPL_CO_PROPS: dict[str, str] = {
+    "hs_object_id":               "ID de registro",
+    "dealname":                   "Nombre del negocio",
+    "deal_uuid":                  "deal_uuid",
+    "nid":                        "nid",
+    "link_habi_capital":          "Link Habi Capital",
+    "hubspot_owner_id":           "Propietario del negocio",
+    "dealstage":                  "Etapa",
+    "pipeline":                   "Pipeline",
+    "negocio_aplica_para_bnpl_":  "¿Negocio aplica para BNPL?",
+    "estado":                     "Estado del Negocio",
+}
+
+# Etapas (por label) que significan que el negocio YA avanzó/cerró con Habi y por
+# tanto NO debe ofrecerse el crédito de liquidez. Se excluyen del tablero.
+BNPL_EXCLUDED_STAGE_LABELS: list[str] = [
+    "aceptó oferta", "oferta aceptada", "pre-oferta aceptada",
+    "legalizado", "legalizados", "declaración juramentada firmada",
+    "documentación cargada", "regresados por cumplimiento", "aprobados cumplimiento",
+    "regresados por legal", "aprobados por legal", "contrato enviado",
+    "contrato regresado", "contrato firmado", "firmado", "regestión", "regestion",
+]
+
+
+def fetch_bnpl_co_deals() -> pd.DataFrame:
+    """Deals CO con negocio_aplica_para_bnpl_=true (sin hipoteca → ofertable)."""
+    properties = list(BNPL_CO_PROPS.keys())
+    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    filters = [
+        {"propertyName": "country", "operator": "EQ", "value": "CO"},
+        {"propertyName": "negocio_aplica_para_bnpl_", "operator": "EQ", "value": "true"},
+    ]
+    rows: list[dict] = []
+    after: str | None = None
+    for _ in range(100):  # max 10000 deals
+        payload = {
+            "filterGroups": [{"filters": filters}],
+            "properties": properties,
+            "sorts": [{"propertyName": "createdate", "direction": "DESCENDING"}],
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+        resp = _request_with_retry("POST", url, json=payload, headers=_headers(), timeout=30)
+        body = resp.json()
+        for deal in body.get("results", []):
+            props = deal.get("properties", {})
+            rows.append({k: props.get(k) for k in properties})
+        paging = body.get("paging", {}).get("next")
+        if not paging:
+            break
+        after = paging.get("after")
+        time.sleep(0.12)
+    return pd.DataFrame(rows, columns=properties)
+
+
+def fetch_deal_stages() -> list[dict]:
+    """[{id, label, is_won}] sobre TODAS las pipelines de deal.
+
+    `is_won` = etapa de cierre ganado (isClosed=true y probabilidad 1.0).
+    El tablero BNPL usa esto + BNPL_EXCLUDED_STAGE_LABELS para excluir negocios
+    que ya avanzaron/cerraron, y para mostrar el label legible de la etapa.
+    """
+    url = "https://api.hubapi.com/crm/v3/pipelines/deals"
+    resp = _request_with_retry("GET", url, headers=_headers(), timeout=20)
+    out: list[dict] = []
+    for p in resp.json().get("results", []):
+        for s in p.get("stages", []):
+            md = s.get("metadata", {}) or {}
+            won = md.get("isClosed") == "true" and str(md.get("probability")) == "1.0"
+            out.append({"id": str(s["id"]), "label": s.get("label", str(s["id"])), "is_won": won})
+    return out
