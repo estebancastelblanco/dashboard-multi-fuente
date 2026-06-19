@@ -195,13 +195,18 @@ try:
 except Exception as exc:
     df_enr = pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
     st.warning(f"BigQuery enriquecimiento: {type(exc).__name__}: {exc}")
-if not df_enr.empty and "equipo_sellers" in df_enr.columns:
+if not df_enr.empty:
     df_enr["deal_uuid"] = df_enr["deal_uuid"].astype(str).str.lower()
-    df = df.merge(df_enr[["deal_uuid", "equipo_sellers"]], left_on="uuid", right_on="deal_uuid", how="left")
-if "equipo_sellers" not in df.columns:
-    df["equipo_sellers"] = pd.NA
+    merge_cols = [c for c in ("deal_uuid", "equipo_sellers", "owner_name") if c in df_enr.columns]
+    df = df.merge(df_enr[merge_cols], left_on="uuid", right_on="deal_uuid", how="left")
+for col in ("equipo_sellers", "owner_name"):
+    if col not in df.columns:
+        df[col] = pd.NA
 df["equipo_sellers"] = df["equipo_sellers"].fillna("(sin equipo)").astype(str).replace("", "(sin equipo)")
 df["hubspot_owner_id"] = df["hubspot_owner_id"].fillna("(sin owner)").astype(str)
+# Comercial = nombre del owner (resuelto en BQ); fallback al hubspot_owner_id.
+df["comercial"] = df["owner_name"].fillna("").astype(str).str.strip()
+df.loc[df["comercial"] == "", "comercial"] = df["hubspot_owner_id"]
 
 # Aplica? (cruce con el Sheet de Habi Capital por uuid).
 aplica_map = load_aplica_map()
@@ -213,11 +218,11 @@ df["aplica"] = df["aplica_raw"].map(lambda v: APLICA_LABELS.get(v, v))
 # Sidebar (parte 2) · filtros derivados de los datos cargados
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### Comercial (hubspot_owner_id)")
-    owners_all = sorted(df["hubspot_owner_id"].dropna().astype(str).unique().tolist())
+    st.markdown("### Comercial")
+    owners_all = sorted(df["comercial"].dropna().astype(str).unique().tolist())
     sel_owners = st.multiselect(
         "owners", owners_all, default=owners_all, label_visibility="collapsed",
-        help="hubspot_owner_id del negocio.",
+        help="Nombre del comercial (hubspot_owner_id resuelto en BigQuery).",
     )
 
     st.markdown("### NID")
@@ -244,7 +249,7 @@ with st.sidebar:
 # Aplicar filtros
 dff = df.copy()
 if sel_owners and len(sel_owners) < len(owners_all):
-    dff = dff[dff["hubspot_owner_id"].isin(sel_owners)]
+    dff = dff[dff["comercial"].isin(sel_owners)]
 if sel_nid:
     dff = dff[dff["nid"].astype(str) == sel_nid]
 if sel_equipos and len(sel_equipos) < len(equipos_all):
@@ -257,7 +262,7 @@ if sel_aplica and len(sel_aplica) < len(APLICA_OPTS):
 # KPIs
 # ─────────────────────────────────────────────────────────────────────────────
 n_negocios = len(dff)
-n_comerciales = int(dff["hubspot_owner_id"].nunique())
+n_comerciales = int(dff["comercial"].nunique())
 n_aplica_si = int((dff["aplica"] == "Sí").sum())
 n_enviados = int((dff["aplica_raw"] != "(no enviado)").sum())
 
@@ -285,7 +290,7 @@ if dff.empty:
     st.info("Sin negocios para el filtro actual.")
 else:
     by_owner = (
-        dff.groupby("hubspot_owner_id")
+        dff.groupby("comercial")
         .agg(negocios=("uuid", "size"),
              aplica_si=("aplica", lambda s: int((s == "Sí").sum())))
         .reset_index()
@@ -294,10 +299,10 @@ else:
     top = by_owner.head(30).iloc[::-1]
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=top["negocios"], y=top["hubspot_owner_id"].astype(str),
+        x=top["negocios"], y=top["comercial"].astype(str),
         orientation="h", marker_color=PRIMARY,
         text=top["negocios"], textposition="outside",
-        name="Negocios", hovertemplate="owner %{y}<br>%{x} negocios<extra></extra>",
+        name="Negocios", hovertemplate="%{y}<br>%{x} negocios<extra></extra>",
     ))
     fig.update_layout(
         paper_bgcolor=WHITE, plot_bgcolor=WHITE,
@@ -305,7 +310,7 @@ else:
         height=max(380, len(top) * 24 + 80),
         margin=dict(l=10, r=60, t=10, b=10),
         xaxis=dict(title="Negocios BNPL=Sí sin cerrar", gridcolor="#ede8f5"),
-        yaxis=dict(title="hubspot_owner_id", type="category"),
+        yaxis=dict(title="Comercial", type="category"),
     )
     st.plotly_chart(fig, use_container_width=True)
     if len(by_owner) > 30:
@@ -320,7 +325,8 @@ st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 show_cols = [
     ("nid", "nid"),
-    ("hubspot_owner_id", "Comercial (owner_id)"),
+    ("comercial", "Comercial"),
+    ("hubspot_owner_id", "owner_id"),
     ("equipo_sellers", "Equipo sellers"),
     ("fecha_aprobado", "Fecha aprobado"),
     ("etapa", "Etapa"),
@@ -328,7 +334,7 @@ show_cols = [
     ("link_habi_capital", "Link Habi Capital"),
 ]
 table = dff[[c for c, _ in show_cols]].rename(columns=dict(show_cols))
-table = table.sort_values(["Comercial (owner_id)", "Aplica?"]).reset_index(drop=True)
+table = table.sort_values(["Comercial", "Aplica?"]).reset_index(drop=True)
 
 
 def _color_aplica(v):

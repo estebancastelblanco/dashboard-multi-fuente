@@ -692,14 +692,17 @@ def fetch_oferta_formal_col_master() -> pd.DataFrame:
 
 
 def fetch_bnpl_co_enrichment(deal_uuids: list[str]) -> pd.DataFrame:
-    """deal_uuid → nid + equipo_sellers para el tablero BNPL Comerciales CO.
+    """deal_uuid → nid + equipo_sellers + owner_name para BNPL Comerciales CO.
 
     nid viene de `hubspot.deals` (la propiedad nid de HubSpot suele venir vacía
     en la API). equipo_sellers viene de `detalle_ofertas_col` (solo poblado para
-    deals que ya tienen oferta; el resto queda nulo).
+    deals que ya tienen oferta). owner_name se resuelve contra `hubspot.owners`
+    (mismo join que la query maestra COL/MX: por email o id), porque la API de
+    owners no está disponible con el token actual.
     """
+    cols = ["deal_uuid", "nid", "equipo_sellers", "owner_name"]
     if not deal_uuids:
-        return pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
+        return pd.DataFrame(columns=cols)
     frames: list[pd.DataFrame] = []
     for i in range(0, len(deal_uuids), 5000):
         chunk = [u for u in deal_uuids[i:i + 5000] if u]
@@ -710,16 +713,21 @@ def fetch_bnpl_co_enrichment(deal_uuids: list[str]) -> pd.DataFrame:
         SELECT
           LOWER(d.deal_uuid) AS deal_uuid,
           ANY_VALUE(CAST(d.nid AS INT64)) AS nid,
-          ANY_VALUE(dox.equipo_sellers) AS equipo_sellers
+          ANY_VALUE(dox.equipo_sellers) AS equipo_sellers,
+          ANY_VALUE(NULLIF(TRIM(CONCAT(IFNULL(o.first_name, ''), ' ',
+                    IFNULL(o.last_name, ''))), '')) AS owner_name
         FROM `sellers-main-prod.hubspot.deals` d
         LEFT JOIN `papyrus-data.habi_wh.detalle_ofertas_col` dox
           ON CAST(dox.nid AS INT64) = CAST(d.nid AS INT64)
+        LEFT JOIN `sellers-main-prod.hubspot.owners` o
+          ON LOWER(o.email) = LOWER(d.hubspot_owner_id)
+          OR CAST(o.id AS STRING) = CAST(d.hubspot_owner_id AS STRING)
         WHERE LOWER(d.deal_uuid) IN ({lst})
         GROUP BY 1
         """
         frames.append(_client().query(sql).to_dataframe())
     if not frames:
-        return pd.DataFrame(columns=["deal_uuid", "nid", "equipo_sellers"])
+        return pd.DataFrame(columns=cols)
     return pd.concat(frames, ignore_index=True).drop_duplicates("deal_uuid")
 
 
